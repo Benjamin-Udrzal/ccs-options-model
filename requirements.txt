@@ -1,0 +1,5 @@
+pandas
+numpy
+polygon-api-client
+requests
+py_vollib

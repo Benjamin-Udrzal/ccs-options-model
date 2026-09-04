@@ -1,0 +1,8 @@
+.venv/
+__pycache__/
+*.pyc
+.idea/
+outputs/
+**/*Model Run/
+/Model Import vU
+/Env Set Up.py

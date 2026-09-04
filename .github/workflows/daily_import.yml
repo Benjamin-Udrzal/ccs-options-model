@@ -1,0 +1,41 @@
+name: Daily CCS Data Import
+
+on:
+  schedule:
+    # 22:00 UTC daily. Your script's decision time is 17:00 Europe/London,
+    # which is 16:00 or 17:00 UTC depending on BST/GMT — this runs a few
+    # hours after that either way, comfortably past both that cutoff and
+    # US market close. Adjust the cron below if you want it tighter.
+    - cron: "0 22 * * *"
+  workflow_dispatch: {}   # lets you trigger it manually from the Actions tab
+
+permissions:
+  contents: write   # needed so the workflow can commit the CSVs back to the repo
+
+jobs:
+  run-import:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run daily import
+        env:
+          POLYGON_API_KEY: ${{ secrets.POLYGON_API_KEY }}
+        run: python run_daily_import.py
+
+      - name: Commit and push CSV outputs
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add outputs/
+          git diff --cached --quiet && echo "No changes to commit" || git commit -m "Daily data import $(date -u +'%Y-%m-%d %H:%M UTC')"
+          git push
