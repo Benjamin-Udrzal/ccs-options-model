@@ -99,7 +99,7 @@ def func_import(
     ###############################################################################
 
     samplesize_test_default = 30
-    samplesize_train_default = 1500  # ~1 entry/week x ~5 years of history (adjust to match actual
+    samplesize_train_default = 500  # ~1 entry/week x ~5 years of history (adjust to match actual
                                  # API data-access window — see HISTORICAL_DATA_LIMIT_YEARS above)
     ticker_list_default = ['SPY', 'QQQ', 'IWM', 'DIA', 'XLF', 'GLD', 'XLE', 'XLV', 'XLI', 'TLT', 'HYG', 'EEM',
                         'XLU', 'XLY', 'XLB', 'XLP', 'FXI', 'SLV']
