@@ -884,6 +884,15 @@ def func_import(
         # Still wrapped defensively — if FMP has no coverage for a ticker (e.g. some ETFs genuinely
         # have no earnings events) or the request fails for any reason, this fills NaN (imputed later,
         # with a global-median fallback) rather than crashing the whole import.
+        # The full FMP-based earnings lookup below is disabled for now (no FMP_API_KEY configured).
+        # We still need the column to exist though, since it's selected further down when building
+        # CCS_summary_df — so fill it with NaN. The "drop columns that are entirely NaN" step later
+        # in the script will then quietly remove it before training/imputation.
+        CCS_summary['Days_To_Next_Earnings'] = np.nan
+        CCS_summary['Days_To_Next_Earnings'] = CCS_summary['Days_To_Next_Earnings'].astype(float)
+
+        # To re-enable the real lookup: set FMP_API_KEY, uncomment the block below, and remove the
+        # two lines directly above.
         # if ENABLE_EARNINGS_FEATURE:
         #     try:
         #         fmp_url = f"https://financialmodelingprep.com/stable/earnings?symbol={ticker}&apikey={FMP_API_KEY}"
