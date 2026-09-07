@@ -2,15 +2,11 @@ name: Daily CCS Data Import
 
 on:
   schedule:
-    # 22:00 UTC daily. Your script's decision time is 17:00 Europe/London,
-    # which is 16:00 or 17:00 UTC depending on BST/GMT — this runs a few
-    # hours after that either way, comfortably past both that cutoff and
-    # US market close. Adjust the cron below if you want it tighter.
     - cron: "0 22 * * *"
-  workflow_dispatch: {}   # lets you trigger it manually from the Actions tab
+  workflow_dispatch: {}
 
 permissions:
-  contents: write   # needed so the workflow can commit the CSVs back to the repo
+  contents: write
 
 jobs:
   run-import:
@@ -36,6 +32,6 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add outputs/
+          git add -A
           git diff --cached --quiet && echo "No changes to commit" || git commit -m "Daily data import $(date -u +'%Y-%m-%d %H:%M UTC')"
           git push

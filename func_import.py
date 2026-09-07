@@ -1,4 +1,3 @@
-
 ######################################
 ## Importing Packages
 ######################################
@@ -25,7 +24,10 @@ def func_import(
         sample_size :int = None,
         ticker_list_str :str = None,
         test_split :float = None,
-        training_dataset = None
+        training_dataset = None,
+        output_dir: str = None  # if None, falls back to a folder next to this script.
+                                 # Pass a path (e.g. "outputs") to control where CSVs land -
+                                 # used by the GitHub Actions runner to save inside the repo checkout.
 
 
 
@@ -882,6 +884,15 @@ def func_import(
         # Still wrapped defensively — if FMP has no coverage for a ticker (e.g. some ETFs genuinely
         # have no earnings events) or the request fails for any reason, this fills NaN (imputed later,
         # with a global-median fallback) rather than crashing the whole import.
+        # The full FMP-based earnings lookup below is disabled for now (no FMP_API_KEY configured).
+        # We still need the column to exist though, since it's selected further down when building
+        # CCS_summary_df — so fill it with NaN. The "drop columns that are entirely NaN" step later
+        # in the script will then quietly remove it before training/imputation.
+        CCS_summary['Days_To_Next_Earnings'] = np.nan
+        CCS_summary['Days_To_Next_Earnings'] = CCS_summary['Days_To_Next_Earnings'].astype(float)
+
+        # To re-enable the real lookup: set FMP_API_KEY, uncomment the block below, and remove the
+        # two lines directly above.
         # if ENABLE_EARNINGS_FEATURE:
         #     try:
         #         fmp_url = f"https://financialmodelingprep.com/stable/earnings?symbol={ticker}&apikey={FMP_API_KEY}"
@@ -1061,16 +1072,21 @@ def func_import(
         raise ValueError(f"Not fully prepared for downloads for the following run reason: {run_reason}")
 
     ######################################
-    ## Downloading Files
+    ## Saving Files
     ######################################
 
-    script_directory = os.path.dirname(os.path.abspath(__file__))
+    # output_dir lets the caller control where files land:
+    #   - left as None: falls back to a folder next to this script (old local-only behaviour)
+    #   - passed in (e.g. by the GitHub Actions runner as "outputs"): files land inside the repo
+    #     checkout so a later workflow step can commit them back to GitHub as real files.
+    base_directory = output_dir if output_dir else os.path.dirname(os.path.abspath(__file__))
+
     datetime_str = datetime.now().strftime("%Y-%m-%d__%H.%M")
 
     outer_folder_name = f"{datetime_str} {run_reason} Model Run"
     inner_folder_name = f"{run_reason} Import Outputs"
 
-    full_downloads_path = os.path.join(script_directory, prediction_model_folder, outer_folder_name, inner_folder_name)
+    full_downloads_path = os.path.join(base_directory, prediction_model_folder, outer_folder_name, inner_folder_name)
     os.makedirs(full_downloads_path, exist_ok=True)
 
 
@@ -1078,17 +1094,26 @@ def func_import(
         return datetime.today().strftime("%Y-%m-%d__%H.%M")
 
 
-    pd.concat(combined_stock_data, ignore_index=True).to_csv(os.path.join(full_downloads_path, f"Stock_Price_Data_{ts()}.csv"), index=False)
-    pd.concat(combined_call_option_data, ignore_index=True).to_csv(os.path.join(full_downloads_path, f"Call_Options_Contract_Data_{ts()}.csv"), index=False)
-    pd.concat(combined_call_spread_pt1, ignore_index=True).to_csv(os.path.join(full_downloads_path, f"4.CCS_Entry_Data_{ts()}.csv"), index=False)
-    pd.concat(combined_call_spread_pt2, ignore_index=True).to_csv(os.path.join(full_downloads_path, f"5.CCS_Exit_Data_{ts()}.csv"), index=False)
-    pd.concat(combined_call_option_prices, ignore_index=True).to_csv(os.path.join(full_downloads_path, f"Call_Option_Prices_{ts()}.csv"), index=False)
+    stock_price_data_all = pd.concat(combined_stock_data, ignore_index=True)
+    call_option_data_all = pd.concat(combined_call_option_data, ignore_index=True)
+    call_spread_pt1_all = pd.concat(combined_call_spread_pt1, ignore_index=True)
+    call_spread_pt2_all = pd.concat(combined_call_spread_pt2, ignore_index=True)
+    call_option_prices_all = pd.concat(combined_call_option_prices, ignore_index=True)
+    intraday_stock_price_all = pd.concat(combined_IntraDayStockPrice, ignore_index=True)
+
+    stock_price_data_all.to_csv(os.path.join(full_downloads_path, f"Stock_Price_Data_{ts()}.csv"), index=False)
+    call_option_data_all.to_csv(os.path.join(full_downloads_path, f"Call_Options_Contract_Data_{ts()}.csv"), index=False)
+    call_spread_pt1_all.to_csv(os.path.join(full_downloads_path, f"4.CCS_Entry_Data_{ts()}.csv"), index=False)
+    call_spread_pt2_all.to_csv(os.path.join(full_downloads_path, f"5.CCS_Exit_Data_{ts()}.csv"), index=False)
+    call_option_prices_all.to_csv(os.path.join(full_downloads_path, f"Call_Option_Prices_{ts()}.csv"), index=False)
     CCS_summary_df.to_csv(os.path.join(full_downloads_path, f"3.CCS_Summary_Data_{ts()}.csv"), index=False)
-    pd.concat(combined_IntraDayStockPrice, ignore_index=True).to_csv(os.path.join(full_downloads_path, f"Intraday_Stock_Price_Data_{ts()}.csv"), index=False)
+    intraday_stock_price_all.to_csv(os.path.join(full_downloads_path, f"Intraday_Stock_Price_Data_{ts()}.csv"), index=False)
 
     if test_split != 1:
         training_dataset["Tick"] = training_dataset["Ticker"].map(ticker_map)
         training_dataset.to_csv(os.path.join(full_downloads_path, f"2.CCS_Training_Data_{ts()}.csv"), index=False)
+    else:
+        training_dataset = None
 
     if 'Is_Fallback_Date' not in testing_dataset.columns:
         testing_dataset['Is_Fallback_Date'] = False
@@ -1096,3 +1121,21 @@ def func_import(
     testing_dataset.to_csv(os.path.join(full_downloads_path, f"1.CCS_Testing_Data_{ts()}.csv"), index=False)
 
     print("Done.")
+
+    # ------------------------------------------------------------------
+    # Return everything as function outputs so other code (e.g. a
+    # training script, or another step in the same workflow) can use
+    # the data directly, without re-reading the CSVs from disk.
+    # ------------------------------------------------------------------
+    return {
+        "output_dir": full_downloads_path,
+        "stock_price_data": stock_price_data_all,
+        "call_option_data": call_option_data_all,
+        "call_spread_entry": call_spread_pt1_all,
+        "call_spread_exit": call_spread_pt2_all,
+        "call_option_prices": call_option_prices_all,
+        "intraday_stock_price": intraday_stock_price_all,
+        "ccs_summary": CCS_summary_df,
+        "training_dataset": training_dataset,
+        "testing_dataset": testing_dataset,
+    }
