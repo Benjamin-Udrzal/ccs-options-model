@@ -1,0 +1,38 @@
+name: Train Data Import
+
+on:
+  workflow_dispatch: {}
+  # No schedule by default — generating a fresh training dataset is a bigger, less routine
+  # operation than the daily test import, so this only runs when you click "Run workflow".
+  # Add a schedule trigger here (same syntax as daily_import.yml) if you'd like it automatic.
+
+permissions:
+  contents: write
+
+jobs:
+  run-train-import:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run training data import
+        env:
+          POLYGON_API_KEY: ${{ secrets.POLYGON_API_KEY }}
+        run: python run_train_import.py
+
+      - name: Commit and push CSV outputs
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet && echo "No changes to commit" || git commit -m "Train data import $(date -u +'%Y-%m-%d %H:%M UTC')"
+          git push
