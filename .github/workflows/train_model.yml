@@ -31,7 +31,7 @@ jobs:
       - name: Train model
         env:
           TRAIN_IMPORT_FOLDER: ${{ github.event.inputs.train_import_folder }}
-        run: python run_train.py
+        run: python run_train_model.py
 
       - name: Commit and push model outputs
         run: |
