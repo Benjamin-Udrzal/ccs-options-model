@@ -1,0 +1,42 @@
+name: Train CCS Model
+
+on:
+  workflow_dispatch:
+    inputs:
+      train_import_folder:
+        description: >
+          Optional: name of a specific "<date> train Model Run" folder to train from
+          (e.g. "2026-08-13__13.37 train Model Run"). Leave blank to auto-use the latest one.
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  train:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Train model
+        env:
+          TRAIN_IMPORT_FOLDER: ${{ github.event.inputs.train_import_folder }}
+        run: python run_train.py
+
+      - name: Commit and push model outputs
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet && echo "No changes to commit" || git commit -m "Train model $(date -u +'%Y-%m-%d %H:%M UTC')"
+          git push
