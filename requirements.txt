@@ -3,3 +3,9 @@ numpy
 polygon-api-client
 requests
 py_vollib
+xgboost
+optuna
+joblib
+scikit-learn
+shap
+matplotlib
