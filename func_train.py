@@ -42,6 +42,7 @@ testing_dataset_prefix = '1.CCS_Testing_Data'
 
 DROP_COLS = [
     "Ticker", "Share_Price_Date", "Exit_Date", "Call_strike_price",
+    "Call_1_expiration_date", "Call_2_expiration_date",
     "Day_1_Cashflow", "Day_2_Cashflow", "Call_1_P&L", "Call_2_P&L"
 ]
 
