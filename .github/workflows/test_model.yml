@@ -1,0 +1,50 @@
+name: Test CCS Model
+
+on:
+  workflow_dispatch:
+    inputs:
+      model_folder:
+        description: >
+          Optional: name of a specific "<date> train Model Run" folder holding the model to
+          test. Leave blank to auto-use the latest committed one.
+        required: false
+        default: ""
+      test_data:
+        description: >
+          Optional: name of a specific "<date> dtest Model Run" folder (or a CSV path) to run
+          predictions on. Leave blank to auto-use the latest committed daily test data.
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Test model
+        env:
+          MODEL_FOLDER: ${{ github.event.inputs.model_folder }}
+          TEST_DATA: ${{ github.event.inputs.test_data }}
+        run: python run_test_model.py
+
+      - name: Commit and push predictions
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet && echo "No changes to commit" || git commit -m "Test model $(date -u +'%Y-%m-%d %H:%M UTC')"
+          git pull --rebase origin master
+          git push
