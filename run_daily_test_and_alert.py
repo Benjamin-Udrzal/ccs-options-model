@@ -18,7 +18,7 @@ import sys
 import requests
 
 from func_import import func_import
-from func_test_model import test_model
+from CCS_Model_Test_v7 import test_model
 
 
 def format_trade_message(df_open, test_date):
@@ -29,13 +29,26 @@ def format_trade_message(df_open, test_date):
         return f"{header}\n\nNo trades suggested today."
 
     lines = [header, f"\n<b>{len(df_open)} position(s) suggested to open:</b>\n"]
+    missing_cols = [c for c in ("Call_1_expiration_date", "Call_2_expiration_date", "Call_strike_price", "Day_1_Cashflow")
+                     if c not in df_open.columns]
+    if missing_cols:
+        print(f"WARNING: predictions are missing expected column(s) {missing_cols} — "
+              f"showing 'N/A' for those fields. This usually means the test data was generated "
+              f"by an older version of func_import.py that doesn't save these columns yet.")
+
     for i, (_, row) in enumerate(df_open.iterrows(), start=1):
+        strike = row.get("Call_strike_price", "N/A")
+        short_expiry = row.get("Call_1_expiration_date", "N/A")
+        long_expiry = row.get("Call_2_expiration_date", "N/A")
+        cashflow = row.get("Day_1_Cashflow", "N/A")
+        strike_str = f"${strike:.2f}" if isinstance(strike, (int, float)) else str(strike)
+        cashflow_str = f"${cashflow:.2f}" if isinstance(cashflow, (int, float)) else str(cashflow)
         lines.append(
-            f"<b>{i}. {row['Ticker']}</b>\n"
-            f"   Strike: ${row['Call_strike_price']:.2f}\n"
-            f"   Short Call Expiry: {row['Call_1_expiration_date']}\n"
-            f"   Long Call Expiry: {row['Call_2_expiration_date']}\n"
-            f"   Expected Day 1 Cashflow: ${row['Day_1_Cashflow']:.2f}\n"
+            f"<b>{i}. {row.get('Ticker', 'Unknown')}</b>\n"
+            f"   Strike: {strike_str}\n"
+            f"   Short Call Expiry: {short_expiry}\n"
+            f"   Long Call Expiry: {long_expiry}\n"
+            f"   Expected Day 1 Cashflow: {cashflow_str}\n"
         )
     return "\n".join(lines)
 
@@ -82,13 +95,22 @@ def main():
     print(f"Predictions saved to: {test_result['output_path']}")
 
     # --- 3. Send the Telegram alert ---
-    df = test_result["predictions"]
-    df_open = df[df["Open_Trade"] == 1].copy()
-    test_date = os.path.basename(os.path.dirname(test_result["test_data_path"]))
+    # Wrapped in try/except deliberately: the import and predictions above are the valuable,
+    # expensive part of this run. A bug in message formatting or a Telegram API hiccup should
+    # never cause the whole script to exit non-zero — that would skip the "commit and push"
+    # step in the workflow and throw away a perfectly good day's data. Worst case here, you
+    # miss one alert but still get the commit; check the Action log if that happens.
+    try:
+        df = test_result["predictions"]
+        df_open = df[df["Open_Trade"] == 1].copy()
+        test_date = os.path.basename(os.path.dirname(test_result["test_data_path"]))
 
-    message = format_trade_message(df_open, test_date)
-    send_telegram_message(message, bot_token, chat_id)
-    print(f"Telegram alert sent ({len(df_open)} trade(s) to open).")
+        message = format_trade_message(df_open, test_date)
+        send_telegram_message(message, bot_token, chat_id)
+        print(f"Telegram alert sent ({len(df_open)} trade(s) to open).")
+    except Exception as e:
+        print(f"WARNING: Telegram alert failed, but import/test data was saved successfully. "
+              f"Error: {e}")
 
 
 if __name__ == "__main__":
