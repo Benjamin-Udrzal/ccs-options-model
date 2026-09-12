@@ -18,7 +18,7 @@ import sys
 import requests
 
 from func_import import func_import
-from func_test_model import test_model
+from CCS_Model_Test_v7 import test_model
 
 
 def format_trade_message(df_open, test_date):
@@ -29,13 +29,13 @@ def format_trade_message(df_open, test_date):
         return f"{header}\n\nNo trades suggested today."
 
     lines = [header, f"\n<b>{len(df_open)} position(s) suggested to open:</b>\n"]
-    for i, row in enumerate(df_open.itertuples(), start=1):
+    for i, (_, row) in enumerate(df_open.iterrows(), start=1):
         lines.append(
-            f"<b>{i}. {row.Ticker}</b>\n"
-            f"   Strike: ${row.Call_strike_price:.2f}\n"
-            f"   Short Call Expiry: {row.Call_1_expiration_date}\n"
-            f"   Long Call Expiry: {row.Call_2_expiration_date}\n"
-            f"   Expected Day 1 Cashflow: ${row.Day_1_Cashflow:.2f}\n"
+            f"<b>{i}. {row['Ticker']}</b>\n"
+            f"   Strike: ${row['Call_strike_price']:.2f}\n"
+            f"   Short Call Expiry: {row['Call_1_expiration_date']}\n"
+            f"   Long Call Expiry: {row['Call_2_expiration_date']}\n"
+            f"   Expected Day 1 Cashflow: ${row['Day_1_Cashflow']:.2f}\n"
         )
     return "\n".join(lines)
 
