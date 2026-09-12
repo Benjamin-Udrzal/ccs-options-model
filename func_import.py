@@ -8,16 +8,6 @@ import numpy as np
 from datetime import datetime, timedelta, time, date
 from zoneinfo import ZoneInfo
 from polygon import RESTClient
-import ######################################
-## Importing Packages
-######################################
-
-import os.path
-import pandas as pd
-import numpy as np
-from datetime import datetime, timedelta, time, date
-from zoneinfo import ZoneInfo
-from polygon import RESTClient
 import requests
 from py_vollib.black_scholes import implied_volatility
 from py_vollib.black_scholes.greeks import analytical
