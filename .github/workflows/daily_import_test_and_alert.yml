@@ -51,7 +51,7 @@ jobs:
         run: python run_daily_test_and_alert.py
 
       - name: Commit and push outputs
-        if: steps.time_check.outputs.proceed == 'true'
+        if: always() && steps.time_check.outputs.proceed == 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
