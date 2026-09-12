@@ -1,0 +1,61 @@
+name: Daily Test and Alert
+
+on:
+  schedule:
+    # UK clocks change twice a year (BST in summer, GMT in winter), but cron only runs in UTC —
+    # so we schedule BOTH possible UTC times for "17:15 Europe/London" and let the guard step
+    # below work out which one is actually correct today, skipping the other.
+    - cron: "15 16 * * 1-5"  # = 17:15 London during BST (late Mar - late Oct)
+    - cron: "15 17 * * 1-5"  # = 17:15 London during GMT (late Oct - late Mar)
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  test-and-alert:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Guard against the redundant DST cron slot
+        id: time_check
+        run: |
+          current_hour=$(TZ="Europe/London" date +"%H")
+          echo "Current London hour: $current_hour"
+          if [ "$current_hour" != "17" ] && [ "${{ github.event_name }}" == "schedule" ]; then
+            echo "Not 17:xx in London right now — this is the other DST cron slot. Skipping."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check out repo
+        if: steps.time_check.outputs.proceed == 'true'
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        if: steps.time_check.outputs.proceed == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        if: steps.time_check.outputs.proceed == 'true'
+        run: pip install -r requirements.txt
+
+      - name: Run daily import, test model, and send Telegram alert
+        if: steps.time_check.outputs.proceed == 'true'
+        env:
+          POLYGON_API_KEY: ${{ secrets.POLYGON_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python run_daily_test_and_alert.py
+
+      - name: Commit and push outputs
+        if: steps.time_check.outputs.proceed == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet && echo "No changes to commit" || git commit -m "Daily test + alert $(date -u +'%Y-%m-%d %H:%M UTC')"
+          git pull --rebase origin master
+          git push
