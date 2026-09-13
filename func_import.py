@@ -647,7 +647,7 @@ def func_import(
             'Share_Price_Date': CCS_day1['Exit_Date'],
             'Stock_Ticker': ticker,
             'Call_strike_price': CCS_day1['Call_strike_price'],
-            '': CCS_day1['Call_1_expiration_date'],
+            'Call_1_expiration_date': CCS_day1['Call_1_expiration_date'],
             'Call_2_expiration_date': CCS_day1['Call_2_expiration_date'],
             'Call_1_Option_Ticker': CCS_day1['Call_1_Option_Ticker'],
             'Call_2_Option_Ticker': CCS_day1['Call_2_Option_Ticker'],
@@ -983,7 +983,7 @@ def func_import(
     # to be discarded under a blanket dropna(), which was needlessly shrinking the dataset. We now
     # median-impute those secondary feature gaps instead of throwing the row away.
     non_feature_cols = ['Ticker', 'Share_Price_Date', 'Exit_Date', 'Overall Profit', 'Call_strike_price',
-                         'Day_1_Cashflow', 'Day_2_Cashflow', 'Call_1_P&L', 'Call_2_P&L', Call_1_expiration_date, Call_2_expiration_date]
+                         'Day_1_Cashflow', 'Day_2_Cashflow', 'Call_1_P&L', 'Call_2_P&L', 'Call_1_expiration_date', 'Call_2_expiration_date']
     feature_cols_to_impute = [c for c in CCS_summary_df_clean.columns if c not in non_feature_cols]
 
     # Drop any feature column that is ENTIRELY NaN across the whole dataset (e.g. Days_To_Next_Earnings
