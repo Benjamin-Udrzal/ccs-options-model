@@ -605,21 +605,21 @@ def func_import(
             front_expirations.append(f_exp)
             back_expirations.append(b_exp)
 
-        CCS_day1[''] = front_expirations  # Call_1 = front / short leg
+        CCS_day1['Call_1_expiration_date'] = front_expirations  # Call_1 = front / short leg
         CCS_day1['Call_2_expiration_date'] = back_expirations   # Call_2 = back / long leg
 
         # Drop rows where we couldn't find a suitable front or back leg
-        missing_legs_idx = CCS_day1[CCS_day1[''].isna() | CCS_day1['Call_2_expiration_date'].isna()].index
+        missing_legs_idx = CCS_day1[CCS_day1['Call_1_expiration_date'].isna() | CCS_day1['Call_2_expiration_date'].isna()].index
         for idx in missing_legs_idx:
             print(f"Dropped entry row | index={idx} | date={CCS_day1.loc[idx, 'Share_Price_Date']} (no suitable front/back leg found)")
         CCS_day1 = CCS_day1.drop(index=missing_legs_idx).reset_index(drop=True)
         CCS_day1_len = len(CCS_day1)
 
-        CCS_day1['Call_1_Time_to_Expiration'] = (CCS_day1[''] - CCS_day1['Share_Price_Date']).apply(lambda d: d.days) / 365
+        CCS_day1['Call_1_Time_to_Expiration'] = (CCS_day1['Call_1_expiration_date'] - CCS_day1['Share_Price_Date']).apply(lambda d: d.days) / 365
         CCS_day1['Call_2_Time_to_Expiration'] = (CCS_day1['Call_2_expiration_date'] - CCS_day1['Share_Price_Date']).apply(lambda d: d.days) / 365
 
         # Exit date = N business days before front leg expiry
-        CCS_day1['Exit_Date'] = CCS_day1[''].apply(
+        CCS_day1['Exit_Date'] = CCS_day1['Call_1_expiration_date'].apply(
             lambda d: (pd.Timestamp(d) - exit_business_days_before_front_expiry * us_bday).date())
 
         CCS_day1 = pd.merge(CCS_day1, call_option_contract_data[['expiration_date', 'strike_price', 'ticker']],
@@ -647,7 +647,7 @@ def func_import(
             'Share_Price_Date': CCS_day1['Exit_Date'],
             'Stock_Ticker': ticker,
             'Call_strike_price': CCS_day1['Call_strike_price'],
-            '': CCS_day1[''],
+            '': CCS_day1['Call_1_expiration_date'],
             'Call_2_expiration_date': CCS_day1['Call_2_expiration_date'],
             'Call_1_Option_Ticker': CCS_day1['Call_1_Option_Ticker'],
             'Call_2_Option_Ticker': CCS_day1['Call_2_Option_Ticker'],
@@ -822,7 +822,7 @@ def func_import(
 
         # New features reflecting the multi-week structure
         CCS_day1['Moneyness'] = (CCS_day1['Call_strike_price'] - CCS_day1['Sim_close']) / CCS_day1['Sim_close']
-        CCS_day1['Front_DTE_At_Entry'] = (CCS_day1[''] - CCS_day1['Share_Price_Date']).apply(lambda d: d.days)
+        CCS_day1['Front_DTE_At_Entry'] = (CCS_day1['Call_1_expiration_date'] - CCS_day1['Share_Price_Date']).apply(lambda d: d.days)
         CCS_day1['Back_DTE_At_Entry'] = (CCS_day1['Call_2_expiration_date'] - CCS_day1['Share_Price_Date']).apply(lambda d: d.days)
         CCS_day1['DTE_Gap'] = CCS_day1['Back_DTE_At_Entry'] - CCS_day1['Front_DTE_At_Entry']
         CCS_day1['Days_Held'] = (CCS_day1['Exit_Date'] - CCS_day1['Share_Price_Date']).apply(lambda d: d.days)
@@ -840,7 +840,7 @@ def func_import(
         CCS_summary['Share_Price_Date'] = pd.to_datetime(CCS_summary['Share_Price_Date'], errors='coerce')
         CCS_summary['Exit_Date'] = pd.to_datetime(CCS_day1['Exit_Date'], errors='coerce')
         # Call_1 = front/short leg, Call_2 = back/long leg (see select_leg_expirations above)
-        CCS_summary[''] = CCS_day1['']
+        CCS_summary['Call_1_expiration_date'] = CCS_day1['Call_1_expiration_date']
         CCS_summary['Call_2_expiration_date'] = CCS_day1['Call_2_expiration_date']
 
         # Entry cashflow: receive premium selling front leg, pay premium buying back leg
