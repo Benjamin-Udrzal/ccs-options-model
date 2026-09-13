@@ -1956,7 +1956,7 @@ def func_import(
 
         # New features reflecting the multi-week structure
         CCS_day1['Moneyness'] = (CCS_day1['Call_strike_price'] - CCS_day1['Sim_close']) / CCS_day1['Sim_close']
-        CCS_day1['Front_DTE_At_Entry'] = (CCS_day1[''] - CCS_day1['Share_Price_Date']).apply(lambda d: d.days)
+        CCS_day1['Front_DTE_At_Entry'] = (CCS_day1['Call_1_expiration_date'] - CCS_day1['Share_Price_Date']).apply(lambda d: d.days)
         CCS_day1['Back_DTE_At_Entry'] = (CCS_day1['Call_2_expiration_date'] - CCS_day1['Share_Price_Date']).apply(lambda d: d.days)
         CCS_day1['DTE_Gap'] = CCS_day1['Back_DTE_At_Entry'] - CCS_day1['Front_DTE_At_Entry']
         CCS_day1['Days_Held'] = (CCS_day1['Exit_Date'] - CCS_day1['Share_Price_Date']).apply(lambda d: d.days)
