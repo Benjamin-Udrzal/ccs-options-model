@@ -9,3 +9,5 @@ joblib
 scikit-learn
 shap
 matplotlib
+gspread
+google-auth
