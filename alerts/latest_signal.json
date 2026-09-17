@@ -3,31 +3,24 @@
   "positions": [
     {
       "ticker": "SPY",
-      "strike": 760.0,
+      "strike": 762.0,
       "short_call_expiry": "2026-10-09",
       "long_call_expiry": "2026-10-23",
-      "day_1_cashflow": -331.8
+      "day_1_cashflow": -398.3
     },
     {
       "ticker": "QQQ",
-      "strike": 710.0,
+      "strike": 716.0,
       "short_call_expiry": "2026-10-09",
       "long_call_expiry": "2026-10-23",
-      "day_1_cashflow": -401.6
+      "day_1_cashflow": -446.0
     },
     {
-      "ticker": "IWM",
-      "strike": 286.0,
+      "ticker": "DIA",
+      "strike": 519.0,
       "short_call_expiry": "2026-10-09",
       "long_call_expiry": "2026-10-23",
-      "day_1_cashflow": -169.4
-    },
-    {
-      "ticker": "XLE",
-      "strike": 65.0,
-      "short_call_expiry": "2026-10-09",
-      "long_call_expiry": "2026-10-23",
-      "day_1_cashflow": -20.7
+      "day_1_cashflow": -137.7
     }
   ]
 }
