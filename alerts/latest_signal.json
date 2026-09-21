@@ -1,19 +1,4 @@
 {
   "date": "dtest Import Outputs",
-  "positions": [
-    {
-      "ticker": "SPY",
-      "strike": 759.0,
-      "short_call_expiry": "2026-10-09",
-      "long_call_expiry": "2026-10-23",
-      "day_1_cashflow": -401.8
-    },
-    {
-      "ticker": "QQQ",
-      "strike": 716.0,
-      "short_call_expiry": "2026-10-09",
-      "long_call_expiry": "2026-10-23",
-      "day_1_cashflow": -531.5
-    }
-  ]
+  "positions": []
 }
