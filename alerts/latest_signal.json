@@ -3,17 +3,17 @@
   "positions": [
     {
       "ticker": "SPY",
-      "strike": 768.0,
+      "strike": 764.0,
       "short_call_expiry": "2026-10-16",
       "long_call_expiry": "2026-10-30",
-      "day_1_cashflow": -415.6
+      "day_1_cashflow": -422.7
     },
     {
-      "ticker": "QQQ",
-      "strike": 741.0,
+      "ticker": "DIA",
+      "strike": 511.0,
       "short_call_expiry": "2026-10-16",
       "long_call_expiry": "2026-10-30",
-      "day_1_cashflow": -546.2
+      "day_1_cashflow": -219.0
     }
   ]
 }
