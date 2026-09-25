@@ -8,6 +8,14 @@ on:
     - cron: "*/5 * * * *"
   workflow_dispatch: {}
 
+# If a run is still going when the next 5-minute trigger fires (e.g. a slow install or a
+# transient API retry), this queues the new run instead of letting them execute in parallel.
+# Without this, two overlapping runs could both read the same "not yet logged" state and both
+# append the same position to the sheet before either had a chance to commit its update.
+concurrency:
+  group: check-telegram-replies
+  cancel-in-progress: false
+
 permissions:
   contents: write
 
