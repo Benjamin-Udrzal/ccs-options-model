@@ -18,10 +18,11 @@ Requires these GitHub Actions secrets:
 import os
 import sys
 import json
+import datetime
 import requests
 
 from func_import import func_import
-from func_test_model import test_model
+from CCS_Model_Test_v7 import test_model
 
 SIGNAL_REFERENCE_PATH = os.path.join("alerts", "latest_signal.json")
 
@@ -78,10 +79,16 @@ def format_trade_message(positions, test_date):
 def save_signal_reference(positions, test_date):
     """Save today's numbered positions so check_telegram_replies.py can look up what
     'opened N' refers to. Overwrites the previous day's file — replies should be sent the
-    same day the alert arrives, before the next day's run overwrites this."""
+    same day the alert arrives, before the next day's run overwrites this. Includes a Unix
+    timestamp so the reply-checker can ignore any message sent BEFORE this signal existed
+    (e.g. a stale "opened 2" left over from before today's alert went out)."""
     os.makedirs(os.path.dirname(SIGNAL_REFERENCE_PATH), exist_ok=True)
     with open(SIGNAL_REFERENCE_PATH, "w") as f:
-        json.dump({"date": test_date, "positions": positions}, f, indent=2)
+        json.dump({
+            "date": test_date,
+            "sent_at": datetime.datetime.now(datetime.timezone.utc).timestamp(),
+            "positions": positions,
+        }, f, indent=2)
     print(f"Signal reference saved to: {SIGNAL_REFERENCE_PATH}")
 
 
