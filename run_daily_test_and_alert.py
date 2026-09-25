@@ -22,7 +22,7 @@ import datetime
 import requests
 
 from func_import import func_import
-from CCS_Model_Test_v7 import test_model
+from func_test_model import test_model
 
 SIGNAL_REFERENCE_PATH = os.path.join("alerts", "latest_signal.json")
 
