@@ -2,18 +2,11 @@
   "date": "dtest Import Outputs",
   "positions": [
     {
-      "ticker": "SPY",
-      "strike": 764.0,
+      "ticker": "SLV",
+      "strike": 58.0,
       "short_call_expiry": "2026-10-16",
       "long_call_expiry": "2026-10-30",
-      "day_1_cashflow": -422.7
-    },
-    {
-      "ticker": "DIA",
-      "strike": 511.0,
-      "short_call_expiry": "2026-10-16",
-      "long_call_expiry": "2026-10-30",
-      "day_1_cashflow": -219.0
+      "day_1_cashflow": -68.3
     }
   ]
 }
