@@ -123,9 +123,15 @@ def main():
         print("No new Telegram messages.")
         return
 
+    signal = load_signal_reference()
+
     # Only act on "opened N" messages; every OTHER update still advances last_update_id below,
     # so we never re-process old chatter, questions, or unrelated messages on future runs.
+    # A message is only "relevant" if it also arrived AFTER the current signal was sent —
+    # otherwise it's a stale reply to a PREVIOUS day's (now-overwritten) signal, and matching
+    # it against today's position numbers would silently log the wrong trade.
     relevant = []
+    stale_count = 0
     for update in updates:
         state["last_update_id"] = max(state["last_update_id"], update["update_id"])
         message = update.get("message")
@@ -136,15 +142,23 @@ def main():
             continue
         text = message.get("text", "")
         match = OPENED_PATTERN.match(text)
-        if match:
-            relevant.append(int(match.group(1)))
+        if not match:
+            continue
+
+        message_sent_at = message.get("date")  # Telegram gives this as a Unix timestamp
+        if signal is not None and message_sent_at is not None and message_sent_at < signal["sent_at"]:
+            stale_count += 1
+            print(f"Ignoring \"{text}\" — sent before today's signal, refers to a previous day's positions.")
+            continue
+
+        relevant.append(int(match.group(1)))
 
     if not relevant:
-        print(f"No 'opened <number>' messages among {len(updates)} update(s).")
+        print(f"No actionable 'opened <number>' messages among {len(updates)} update(s) "
+              f"({stale_count} stale message(s) ignored).")
         save_state(state)
         return
 
-    signal = load_signal_reference()
     if signal is None:
         for n in relevant:
             send_telegram_message(bot_token, chat_id,
