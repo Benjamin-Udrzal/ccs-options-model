@@ -1,9 +1,10 @@
 {
-  "last_update_id": 197851381,
+  "last_update_id": 197851382,
   "logged_positions": {
     "dtest Import Outputs": [
       1,
       2
     ]
-  }
+  },
+  "pending_close": null
 }
