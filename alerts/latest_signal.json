@@ -1,20 +1,13 @@
 {
   "date": "dtest Import Outputs",
-  "sent_at": 1790363203.552595,
+  "sent_at": 1790536297.252365,
   "positions": [
-    {
-      "ticker": "DIA",
-      "strike": 517.0,
-      "short_call_expiry": "2026-10-16",
-      "long_call_expiry": "2026-10-30",
-      "day_1_cashflow": -261.9
-    },
     {
       "ticker": "SLV",
       "strike": 58.0,
       "short_call_expiry": "2026-10-16",
       "long_call_expiry": "2026-10-30",
-      "day_1_cashflow": -62.3
+      "day_1_cashflow": -74.2
     }
   ]
 }
