@@ -1,13 +1,27 @@
 {
   "date": "dtest Import Outputs",
-  "sent_at": 1790536297.252365,
+  "sent_at": 1791411314.49753,
   "positions": [
     {
+      "ticker": "IWM",
+      "strike": 278.0,
+      "short_call_expiry": "2026-10-30",
+      "long_call_expiry": "2026-11-13",
+      "day_1_cashflow": -218.5
+    },
+    {
+      "ticker": "GLD",
+      "strike": 377.0,
+      "short_call_expiry": "2026-10-30",
+      "long_call_expiry": "2026-11-13",
+      "day_1_cashflow": -305.5
+    },
+    {
       "ticker": "SLV",
-      "strike": 58.0,
-      "short_call_expiry": "2026-10-16",
-      "long_call_expiry": "2026-10-30",
-      "day_1_cashflow": -74.2
+      "strike": 54.0,
+      "short_call_expiry": "2026-10-30",
+      "long_call_expiry": "2026-11-13",
+      "day_1_cashflow": -61.1
     }
   ]
 }
