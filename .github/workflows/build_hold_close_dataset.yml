@@ -1,0 +1,58 @@
+name: Build Hold-Close Dataset
+
+on:
+  workflow_dispatch:
+    inputs:
+      max_positions:
+        description: "Optional: cap the number of positions processed, for a quick test run (e.g. 20). Leave blank for all."
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  build-dataset:
+    runs-on: ubuntu-latest
+    # This walks every day of every historical position against Polygon — expect it to take a
+    # long time for the full dataset. Raise this if it times out; GitHub's default job limit is
+    # 6 hours (360 minutes).
+    timeout-minutes: 300
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Build dataset
+        env:
+          POLYGON_API_KEY: ${{ secrets.POLYGON_API_KEY }}
+          MAX_POSITIONS: ${{ github.event.inputs.max_positions }}
+        run: |
+          python -c "
+          import os
+          from build_hold_close_dataset import build_dataset
+          max_pos = os.environ.get('MAX_POSITIONS') or None
+          build_dataset(
+              polygon_api_key=os.environ['POLYGON_API_KEY'],
+              search_root=os.getcwd(),
+              output_dir=os.path.join(os.getcwd(), 'hold_close_data'),
+              max_positions=int(max_pos) if max_pos else None,
+          )
+          "
+
+      - name: Commit and push dataset
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet && echo "No changes to commit" || git commit -m "Build hold/close dataset $(date -u +'%Y-%m-%d %H:%M UTC')"
+          git pull --rebase origin master
+          git push
