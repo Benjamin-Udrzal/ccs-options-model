@@ -50,12 +50,23 @@ def calculate_iv_and_greeks(S, K, T, option_price, option_type="c", r=RISK_FREE_
 def find_option_contract(client, ticker, strike, expiration_date, contract_type="call"):
     """Look up the Polygon options-ticker string for one specific contract — same method
     func_import.py uses (client.list_options_contracts), so the returned ticker is guaranteed
-    to match what a live run would have traded. Returns None if not found."""
+    to match what a live run would have traded. Returns None if not found.
+
+    IMPORTANT: Polygon's list_options_contracts excludes EXPIRED contracts unless explicitly
+    told otherwise (it defaults to only-currently-listed contracts). Every position the
+    historical dataset builder looks up is, by definition, already expired relative to
+    "today" — so without expired=True this call returns zero results for 100% of positions,
+    which is exactly the "could not resolve option contract(s)" failure seen in practice.
+    The daily checker (run_daily_hold_close_check.py) looks up CURRENTLY-OPEN positions whose
+    contracts haven't expired yet, so expired=True is harmless there too: it simply widens the
+    search to also include expired contracts, it doesn't exclude unexpired ones.
+    """
     results = list(client.list_options_contracts(
         underlying_ticker=ticker,
         contract_type=contract_type,
         strike_price=strike,
         expiration_date=expiration_date.isoformat() if hasattr(expiration_date, "isoformat") else expiration_date,
+        expired=True,
         limit=5,
     ))
     return results[0].ticker if results else None
