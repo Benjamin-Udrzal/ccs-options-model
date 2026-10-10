@@ -4,10 +4,11 @@ Entry point for the "Check Telegram Replies" GitHub Actions workflow.
 Polls Telegram for new messages (GitHub Actions can't run a persistent webhook server, so
 short-interval polling is the practical alternative). Handles two kinds of replies:
 
-    opened <number>
-        e.g. "opened 2" — matches the position numbers from the day's Telegram alert (see
-        run_daily_test_and_alert.py). Looks it up in alerts/latest_signal.json and appends
-        it as a new row to the "Open Positions" tab of your Google Sheet.
+    opened <number>[,<number>...]
+        e.g. "opened 2" or "opened 1,2,3" (commas and/or spaces both work) — matches the
+        position numbers from the day's Telegram alert (see run_daily_test_and_alert.py).
+        Looks each one up in alerts/latest_signal.json and appends it as a new row to the
+        "Open Positions" tab of your Google Sheet.
 
     closed <strike> <ticker> <profit>
         e.g. "closed 56 SLV 23.6" — finds the matching OPEN row(s) in the sheet by ticker and
@@ -47,7 +48,9 @@ SHEET_HEADERS = [
     "Entry Cashflow", "Status", "Exit Date", "Exit Cashflow", "Profit",
 ]
 
-OPENED_PATTERN = re.compile(r"^\s*opened\s+(\d+)\s*$", re.IGNORECASE)
+# Accepts one or more position numbers after "opened", separated by commas and/or whitespace:
+# "opened 2", "opened 1,2,3", "opened 1, 2, 3", and "opened 1 2 3" all match.
+OPENED_PATTERN = re.compile(r"^\s*opened\s+(\d+(?:\s*[,\s]\s*\d+)*)\s*$", re.IGNORECASE)
 CLOSED_PATTERN = re.compile(r"^\s*closed\s+(-?[\d.]+)\s+([A-Za-z.]+)\s+(-?[\d.]+)\s*$", re.IGNORECASE)
 
 
@@ -233,6 +236,7 @@ def main():
     opened_requests = []
     closed_requests = []
     disambiguation_replies = []
+    unrecognized = []  # (chat_id-safe) raw text of messages that matched nothing, for a reply
 
     for update in updates:
         state["last_update_id"] = max(state["last_update_id"], update["update_id"])
@@ -253,7 +257,12 @@ def main():
             if signal is not None and message_sent_at is not None and message_sent_at < signal["sent_at"]:
                 print(f"Ignoring \"{text}\" — sent before today's signal, refers to a previous day's positions.")
                 continue
-            opened_requests.append(int(opened_match.group(1)))
+            # group(1) is everything after "opened ", e.g. "1,2,3" or "1, 2 3" — split on any
+            # mix of commas/whitespace and de-duplicate while preserving order.
+            numbers = [int(n) for n in re.split(r"[,\s]+", opened_match.group(1).strip()) if n]
+            for n in numbers:
+                if n not in opened_requests:
+                    opened_requests.append(n)
         elif closed_match:
             closed_requests.append({
                 "strike": float(closed_match.group(1)),
@@ -262,6 +271,16 @@ def main():
             })
         elif state.get("pending_close"):
             disambiguation_replies.append(text.strip())
+        else:
+            unrecognized.append(text)
+
+    for text in unrecognized:
+        send_telegram_message(
+            bot_token, chat_id,
+            f"⚠️ Didn't understand: \"{text}\". Expected formats are \"opened &lt;number&gt;\" "
+            f"(or \"opened 1,2,3\" for several), or \"closed &lt;strike&gt; &lt;ticker&gt; &lt;profit&gt;\"."
+        )
+        print(f"Unrecognized message, replied with format help: \"{text}\"")
 
     if not opened_requests and not closed_requests and not disambiguation_replies:
         print(f"No actionable messages among {len(updates)} update(s).")
