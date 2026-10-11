@@ -23,7 +23,7 @@ from zoneinfo import ZoneInfo
 import requests
 
 from func_import import func_import
-from test_model import test_model
+from func_test_model import test_model
 
 SIGNAL_REFERENCE_PATH = os.path.join("alerts", "latest_signal.json")
 ALERT_LOG_PATH = os.path.join("alerts", "alert_log.json")
