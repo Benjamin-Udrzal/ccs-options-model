@@ -19,6 +19,7 @@ import os
 import sys
 import json
 import datetime
+from zoneinfo import ZoneInfo
 import requests
 
 from func_import import func_import
@@ -26,6 +27,21 @@ from CCS_Model_Test_v7 import test_model
 
 SIGNAL_REFERENCE_PATH = os.path.join("alerts", "latest_signal.json")
 ALERT_LOG_PATH = os.path.join("alerts", "alert_log.json")
+
+
+def today_uk_date():
+    """The current calendar date in Europe/London, used as the per-day key for both the
+    signal reference and the alert dedup log.
+
+    NOTE: an earlier version of this script derived "today's date" from
+    os.path.dirname(test_result["test_data_path"]) — but that path's immediate parent folder
+    is func_import's constant "<run_reason> Import Outputs" directory name, not a date at all.
+    That meant every day's Telegram header read "CCS Daily Signal — dtest Import Outputs"
+    instead of an actual date, and — more seriously — once per-day alert dedup was added, it
+    would have kept matching that same constant string forever, silently blocking EVERY future
+    alert after the first one ever sent. Using the real Europe/London calendar date here avoids
+    both problems and doesn't depend on func_import's folder-naming scheme at all."""
+    return datetime.datetime.now(ZoneInfo("Europe/London")).date().isoformat()
 
 
 def build_positions_list(df_open):
@@ -53,9 +69,9 @@ def build_positions_list(df_open):
     return positions
 
 
-def format_trade_message(positions, test_date):
+def format_trade_message(positions, signal_date):
     """Build an HTML-formatted Telegram message from a positions list (see build_positions_list)."""
-    header = f"📊 <b>CCS Daily Signal — {test_date}</b>"
+    header = f"📊 <b>CCS Daily Signal — {signal_date}</b>"
 
     if not positions:
         return f"{header}\n\nNo trades suggested today."
@@ -77,24 +93,24 @@ def format_trade_message(positions, test_date):
     return "\n".join(lines)
 
 
-def save_signal_reference(positions, test_date):
+def save_signal_reference(positions, signal_date):
     """Save today's numbered positions so check_telegram_replies.py can look up what
     'opened N' refers to. Overwrites the previous day's file — replies should be sent the
     same day the alert arrives, before the next day's run overwrites this. Includes a Unix
     timestamp so the reply-checker can ignore any message sent BEFORE this signal existed
     (e.g. a stale "opened 2" left over from before today's alert went out).
 
-    If a signal for THIS SAME test_date already exists (this workflow fired more than once
-    today — see GitHub Actions scheduling notes in main()), it is left untouched rather than
-    overwritten. Rewriting it would bump "sent_at" forward, which could make the reply-checker
-    wrongly discard an "opened N" reply that the user already sent in response to the first
-    run's alert, just because it now looks "older than the signal"."""
+    If a signal for THIS SAME signal_date already exists (e.g. a manual run happens on a day
+    a scheduled alert already went out), it is left untouched rather than overwritten.
+    Rewriting it would bump "sent_at" forward, which could make the reply-checker wrongly
+    discard an "opened N" reply that the user already sent in response to the earlier alert,
+    just because it now looks "older than the signal"."""
     if os.path.exists(SIGNAL_REFERENCE_PATH):
         try:
             with open(SIGNAL_REFERENCE_PATH) as f:
                 existing = json.load(f)
-            if existing.get("date") == test_date:
-                print(f"Signal reference for {test_date} already exists — leaving it as-is "
+            if existing.get("date") == signal_date:
+                print(f"Signal reference for {signal_date} already exists — leaving it as-is "
                       f"(not resetting sent_at, so any reply already sent today still resolves correctly).")
                 return
         except (json.JSONDecodeError, OSError):
@@ -103,7 +119,7 @@ def save_signal_reference(positions, test_date):
     os.makedirs(os.path.dirname(SIGNAL_REFERENCE_PATH), exist_ok=True)
     with open(SIGNAL_REFERENCE_PATH, "w") as f:
         json.dump({
-            "date": test_date,
+            "date": signal_date,
             "sent_at": datetime.datetime.now(datetime.timezone.utc).timestamp(),
             "positions": positions,
         }, f, indent=2)
@@ -151,6 +167,34 @@ def main():
         print("ERROR: TELEGRAM_BOT_TOKEN and/or TELEGRAM_CHAT_ID environment variable is not set.")
         sys.exit(1)
 
+    # --- 0. Decide up front whether this run should do anything at all ---
+    #
+    # GitHub Actions' `schedule` trigger is best-effort and can be delayed by hours — enough
+    # that this workflow's two DST-safe cron slots (see the workflow YAML) can both end up
+    # firing on the same day, in either order, at unpredictable times. Rather than trying to
+    # guess which slot is "correct" by checking the clock (the old approach: skip unless the
+    # current London hour is 17 — which wrongly skips a legitimately first, just-late run), the
+    # rule here is simpler and matches what's actually wanted: whichever scheduled run fires
+    # FIRST each day does the real work and sends the alert; any other scheduled run that fires
+    # later the same day is a repeat, and skips immediately, before spending any time or
+    # Polygon API quota on the import/test.
+    #
+    # A manual run (workflow_dispatch — clicking "Run workflow", or re-running a job) is always
+    # a deliberate request, so it always runs fully and always sends, regardless of whether a
+    # scheduled alert already went out today. It also never writes to alert_log.json, so it can
+    # neither block nor be blocked by the schedule's own once-a-day tracking — the two are
+    # tracked completely independently.
+    is_scheduled_run = os.environ.get("GITHUB_EVENT_NAME") == "schedule"
+    signal_date = today_uk_date()
+
+    if is_scheduled_run:
+        alert_log = load_alert_log()
+        if signal_date in alert_log.get("sent_dates", []):
+            print(f"Alert for {signal_date} was already sent by an earlier scheduled run today — "
+                  f"this run is a repeat/delayed trigger (see DST cron notes in the workflow). "
+                  f"Skipping the import/test/alert pipeline entirely — nothing left to do.")
+            return
+
     # --- 1. Run the daily import ---
     output_dir = os.path.join(os.getcwd(), "dtest_outputs")
     import_result = func_import(
@@ -176,42 +220,26 @@ def main():
     # step in the workflow and throw away a perfectly good day's data. Worst case here, you
     # miss one alert but still get the commit; check the Action log if that happens.
     #
-    # NOTE ON DUPLICATE RUNS: GitHub Actions' `schedule` trigger is best-effort and can be
-    # delayed, sometimes enough that this workflow's two DST-safe cron slots both end up firing
-    # for the same day (see the workflow's guard step). The import/test above is harmless to
-    # repeat — same inputs, same outputs — but sending the Telegram alert twice would be
-    # confusing and risks the user acting on stale position numbers. alert_log.json (committed
-    # back to the repo, same pattern as telegram_state.json) remembers which dates a SCHEDULED
-    # alert has already gone out for, so a same-day repeat scheduled run skips re-sending it.
-    #
-    # A manual run (workflow_dispatch — clicking "Run workflow", or re-running a failed job)
-    # is a deliberate request for a fresh alert — e.g. testing, or recovering after a failure —
-    # so it always sends, regardless of whether a scheduled alert already went out today. It
-    # also does NOT write to alert_log, so it never blocks or gets blocked by the schedule's
-    # own once-a-day dedup; the two are tracked independently.
-    is_scheduled_run = os.environ.get("GITHUB_EVENT_NAME") == "schedule"
+    # Note: whether to send at all was already decided in step 0, before the expensive import
+    # and test ran — by this point we always want to send (it's either a manual run, or the
+    # first scheduled run of the day).
     try:
         df = test_result["predictions"]
         df_open = df[df["Open_Trade"] == 1].copy()
-        test_date = os.path.basename(os.path.dirname(test_result["test_data_path"]))
 
         positions = build_positions_list(df_open)
-        save_signal_reference(positions, test_date)
+        save_signal_reference(positions, signal_date)
 
-        alert_log = load_alert_log()
-        already_sent_today = is_scheduled_run and test_date in alert_log.get("sent_dates", [])
+        message = format_trade_message(positions, signal_date)
+        send_telegram_message(message, bot_token, chat_id)
 
-        if already_sent_today:
-            print(f"Alert for {test_date} was already sent earlier today — skipping duplicate "
-                  f"Telegram message (this run was likely a delayed/repeat scheduled trigger).")
-        else:
-            message = format_trade_message(positions, test_date)
-            send_telegram_message(message, bot_token, chat_id)
-            if is_scheduled_run:
-                alert_log.setdefault("sent_dates", []).append(test_date)
-                save_alert_log(alert_log)
-            print(f"Telegram alert sent ({len(positions)} trade(s) to open) "
-                  f"[trigger: {os.environ.get('GITHUB_EVENT_NAME', 'unknown')}].")
+        if is_scheduled_run:
+            alert_log = load_alert_log()
+            alert_log.setdefault("sent_dates", []).append(signal_date)
+            save_alert_log(alert_log)
+
+        print(f"Telegram alert sent ({len(positions)} trade(s) to open) "
+              f"[trigger: {os.environ.get('GITHUB_EVENT_NAME', 'unknown')}].")
     except Exception as e:
         print(f"WARNING: Telegram alert failed, but import/test data was saved successfully. "
               f"Error: {e}")
