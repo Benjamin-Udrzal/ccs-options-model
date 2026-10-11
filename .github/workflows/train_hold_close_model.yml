@@ -1,0 +1,40 @@
+name: Train Hold-Close Model
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  train:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Train model
+        run: |
+          python -c "
+          import os
+          from train_hold_close_model import train_hold_close_model
+          train_hold_close_model(search_root=os.getcwd(), output_dir=os.path.join(os.getcwd(), 'hold_close_model'))
+          "
+
+      - name: Commit and push model
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet && echo "No changes to commit" || git commit -m "Train hold/close model $(date -u +'%Y-%m-%d %H:%M UTC')"
+          git pull --rebase origin master
+          git push
