@@ -22,9 +22,10 @@ import datetime
 import requests
 
 from func_import import func_import
-from func_test_model import test_model
+from CCS_Model_Test_v7 import test_model
 
 SIGNAL_REFERENCE_PATH = os.path.join("alerts", "latest_signal.json")
+ALERT_LOG_PATH = os.path.join("alerts", "alert_log.json")
 
 
 def build_positions_list(df_open):
@@ -81,7 +82,24 @@ def save_signal_reference(positions, test_date):
     'opened N' refers to. Overwrites the previous day's file — replies should be sent the
     same day the alert arrives, before the next day's run overwrites this. Includes a Unix
     timestamp so the reply-checker can ignore any message sent BEFORE this signal existed
-    (e.g. a stale "opened 2" left over from before today's alert went out)."""
+    (e.g. a stale "opened 2" left over from before today's alert went out).
+
+    If a signal for THIS SAME test_date already exists (this workflow fired more than once
+    today — see GitHub Actions scheduling notes in main()), it is left untouched rather than
+    overwritten. Rewriting it would bump "sent_at" forward, which could make the reply-checker
+    wrongly discard an "opened N" reply that the user already sent in response to the first
+    run's alert, just because it now looks "older than the signal"."""
+    if os.path.exists(SIGNAL_REFERENCE_PATH):
+        try:
+            with open(SIGNAL_REFERENCE_PATH) as f:
+                existing = json.load(f)
+            if existing.get("date") == test_date:
+                print(f"Signal reference for {test_date} already exists — leaving it as-is "
+                      f"(not resetting sent_at, so any reply already sent today still resolves correctly).")
+                return
+        except (json.JSONDecodeError, OSError):
+            pass  # corrupt/unreadable — fall through and just (re)write a fresh one
+
     os.makedirs(os.path.dirname(SIGNAL_REFERENCE_PATH), exist_ok=True)
     with open(SIGNAL_REFERENCE_PATH, "w") as f:
         json.dump({
@@ -90,6 +108,24 @@ def save_signal_reference(positions, test_date):
             "positions": positions,
         }, f, indent=2)
     print(f"Signal reference saved to: {SIGNAL_REFERENCE_PATH}")
+
+
+def load_alert_log():
+    if os.path.exists(ALERT_LOG_PATH):
+        try:
+            with open(ALERT_LOG_PATH) as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError):
+            pass
+    return {"sent_dates": []}
+
+
+def save_alert_log(log):
+    os.makedirs(os.path.dirname(ALERT_LOG_PATH), exist_ok=True)
+    # Keep the log small — only recent dates are ever relevant for same-day-repeat detection.
+    log["sent_dates"] = log.get("sent_dates", [])[-30:]
+    with open(ALERT_LOG_PATH, "w") as f:
+        json.dump(log, f, indent=2)
 
 
 def send_telegram_message(text, bot_token, chat_id):
@@ -139,6 +175,21 @@ def main():
     # never cause the whole script to exit non-zero — that would skip the "commit and push"
     # step in the workflow and throw away a perfectly good day's data. Worst case here, you
     # miss one alert but still get the commit; check the Action log if that happens.
+    #
+    # NOTE ON DUPLICATE RUNS: GitHub Actions' `schedule` trigger is best-effort and can be
+    # delayed, sometimes enough that this workflow's two DST-safe cron slots both end up firing
+    # for the same day (see the workflow's guard step). The import/test above is harmless to
+    # repeat — same inputs, same outputs — but sending the Telegram alert twice would be
+    # confusing and risks the user acting on stale position numbers. alert_log.json (committed
+    # back to the repo, same pattern as telegram_state.json) remembers which dates a SCHEDULED
+    # alert has already gone out for, so a same-day repeat scheduled run skips re-sending it.
+    #
+    # A manual run (workflow_dispatch — clicking "Run workflow", or re-running a failed job)
+    # is a deliberate request for a fresh alert — e.g. testing, or recovering after a failure —
+    # so it always sends, regardless of whether a scheduled alert already went out today. It
+    # also does NOT write to alert_log, so it never blocks or gets blocked by the schedule's
+    # own once-a-day dedup; the two are tracked independently.
+    is_scheduled_run = os.environ.get("GITHUB_EVENT_NAME") == "schedule"
     try:
         df = test_result["predictions"]
         df_open = df[df["Open_Trade"] == 1].copy()
@@ -147,9 +198,20 @@ def main():
         positions = build_positions_list(df_open)
         save_signal_reference(positions, test_date)
 
-        message = format_trade_message(positions, test_date)
-        send_telegram_message(message, bot_token, chat_id)
-        print(f"Telegram alert sent ({len(positions)} trade(s) to open).")
+        alert_log = load_alert_log()
+        already_sent_today = is_scheduled_run and test_date in alert_log.get("sent_dates", [])
+
+        if already_sent_today:
+            print(f"Alert for {test_date} was already sent earlier today — skipping duplicate "
+                  f"Telegram message (this run was likely a delayed/repeat scheduled trigger).")
+        else:
+            message = format_trade_message(positions, test_date)
+            send_telegram_message(message, bot_token, chat_id)
+            if is_scheduled_run:
+                alert_log.setdefault("sent_dates", []).append(test_date)
+                save_alert_log(alert_log)
+            print(f"Telegram alert sent ({len(positions)} trade(s) to open) "
+                  f"[trigger: {os.environ.get('GITHUB_EVENT_NAME', 'unknown')}].")
     except Exception as e:
         print(f"WARNING: Telegram alert failed, but import/test data was saved successfully. "
               f"Error: {e}")
