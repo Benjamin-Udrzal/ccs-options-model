@@ -52,23 +52,31 @@ def find_option_contract(client, ticker, strike, expiration_date, contract_type=
     func_import.py uses (client.list_options_contracts), so the returned ticker is guaranteed
     to match what a live run would have traded. Returns None if not found.
 
-    IMPORTANT: Polygon's list_options_contracts excludes EXPIRED contracts unless explicitly
-    told otherwise (it defaults to only-currently-listed contracts). Every position the
-    historical dataset builder looks up is, by definition, already expired relative to
-    "today" — so without expired=True this call returns zero results for 100% of positions,
-    which is exactly the "could not resolve option contract(s)" failure seen in practice.
-    The daily checker (run_daily_hold_close_check.py) looks up CURRENTLY-OPEN positions whose
-    contracts haven't expired yet, so expired=True is harmless there too: it simply widens the
-    search to also include expired contracts, it doesn't exclude unexpired ones.
+    IMPORTANT: Polygon's `expired` parameter on this endpoint is a strict filter, not an
+    "also include" switch — expired=False (the default) returns ONLY currently active,
+    not-yet-expired contracts, and expired=True returns ONLY already-expired ones. Each
+    excludes exactly what the other needs:
+      - build_hold_close_dataset.py looks up EXPIRED historical positions -> needs expired=True.
+      - run_daily_hold_close_check.py looks up CURRENTLY OPEN positions whose contracts
+        haven't expired yet -> needs expired=False.
+    An earlier version of this function hardcoded expired=True to fix the first case, which
+    silently broke the second (every live position lookup in the daily checker started
+    returning zero results). Since this one function serves both callers, it tries the
+    active-contract search first (the common case for a brand-new caller), then falls back to
+    searching expired contracts if that comes up empty — covering both without the caller
+    needing to know or declare which situation it's in.
     """
-    results = list(client.list_options_contracts(
-        underlying_ticker=ticker,
-        contract_type=contract_type,
-        strike_price=strike,
-        expiration_date=expiration_date.isoformat() if hasattr(expiration_date, "isoformat") else expiration_date,
-        expired=True,
-        limit=5,
-    ))
+    def _search(expired):
+        return list(client.list_options_contracts(
+            underlying_ticker=ticker,
+            contract_type=contract_type,
+            strike_price=strike,
+            expiration_date=expiration_date.isoformat() if hasattr(expiration_date, "isoformat") else expiration_date,
+            expired=expired,
+            limit=5,
+        ))
+
+    results = _search(expired=False) or _search(expired=True)
     return results[0].ticker if results else None
 
 
