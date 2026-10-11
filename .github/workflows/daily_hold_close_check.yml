@@ -1,0 +1,60 @@
+name: Daily Hold-Close Check
+
+on:
+  schedule:
+    # Same DST-safe double-schedule approach as daily_test_and_alert.yml: runs a bit after your
+    # 17:15 alert goes out, so you get both messages close together each weekday evening.
+    - cron: "30 16 * * 1-5"  # = 17:30 London during BST
+    - cron: "30 17 * * 1-5"  # = 17:30 London during GMT
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  check-positions:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Guard against the redundant DST cron slot
+        id: time_check
+        run: |
+          current_hour=$(TZ="Europe/London" date +"%H")
+          if [ "$current_hour" != "17" ] && [ "${{ github.event_name }}" == "schedule" ]; then
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check out repo
+        if: steps.time_check.outputs.proceed == 'true'
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        if: steps.time_check.outputs.proceed == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        if: steps.time_check.outputs.proceed == 'true'
+        run: pip install -r requirements.txt
+
+      - name: Check open positions
+        if: steps.time_check.outputs.proceed == 'true'
+        env:
+          POLYGON_API_KEY: ${{ secrets.POLYGON_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
+        run: python run_daily_hold_close_check.py
+
+      - name: Commit and push updated history
+        if: always() && steps.time_check.outputs.proceed == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet && echo "No changes to commit" || git commit -m "Hold/close check $(date -u +'%Y-%m-%d %H:%M UTC')"
+          git pull --rebase origin master
+          git push
