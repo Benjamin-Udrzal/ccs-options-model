@@ -1,27 +1,34 @@
 {
-  "date": "dtest Import Outputs",
-  "sent_at": 1791411314.49753,
+  "date": "2026-10-11",
+  "sent_at": 1791752011.662949,
   "positions": [
     {
+      "ticker": "SPY",
+      "strike": 777.0,
+      "short_call_expiry": "2026-10-30",
+      "long_call_expiry": "2026-11-13",
+      "day_1_cashflow": -471.5
+    },
+    {
       "ticker": "IWM",
-      "strike": 278.0,
+      "strike": 279.0,
       "short_call_expiry": "2026-10-30",
       "long_call_expiry": "2026-11-13",
-      "day_1_cashflow": -218.5
+      "day_1_cashflow": -251.0
     },
     {
-      "ticker": "GLD",
-      "strike": 377.0,
+      "ticker": "XLF",
+      "strike": 55.0,
       "short_call_expiry": "2026-10-30",
       "long_call_expiry": "2026-11-13",
-      "day_1_cashflow": -305.5
+      "day_1_cashflow": -32.0
     },
     {
-      "ticker": "SLV",
-      "strike": 54.0,
+      "ticker": "TLT",
+      "strike": 78.0,
       "short_call_expiry": "2026-10-30",
       "long_call_expiry": "2026-11-13",
-      "day_1_cashflow": -61.1
+      "day_1_cashflow": -27.1
     }
   ]
 }
