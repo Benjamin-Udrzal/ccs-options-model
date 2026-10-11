@@ -3,10 +3,15 @@ name: Daily Test and Alert
 on:
   schedule:
     # UK clocks change twice a year (BST in summer, GMT in winter), but cron only runs in UTC —
-    # so we schedule BOTH possible UTC times for "17:15 Europe/London" and let the guard step
-    # below work out which one is actually correct today, skipping the other.
-    - cron: "15 16 * * 1-5"  # = 17:15 London during BST (late Mar - late Oct)
-    - cron: "15 17 * * 1-5"  # = 17:15 London during GMT (late Oct - late Mar)
+    # so we schedule BOTH possible UTC times for "17:07 Europe/London". There's no longer a
+    # clock-based guard step to pick between them: run_daily_test_and_alert.py itself decides,
+    # via alerts/alert_log.json, whether today's alert has already been sent. Whichever of these
+    # two cron slots fires FIRST on a given day does the real work (regardless of how late a
+    # delayed GitHub Actions scheduler actually runs it); the other is a same-day repeat and
+    # exits immediately without re-running the import/test. See run_daily_test_and_alert.py for
+    # the actual dedup logic.
+    - cron: "7 16 * * 1-5"  # = 17:07 London during BST (late Mar - late Oct)
+    - cron: "7 17 * * 1-5"  # = 17:07 London during GMT (late Oct - late Mar)
   workflow_dispatch: {}
 
 permissions:
@@ -16,34 +21,18 @@ jobs:
   test-and-alert:
     runs-on: ubuntu-latest
     steps:
-      - name: Guard against the redundant DST cron slot
-        id: time_check
-        run: |
-          current_hour=$(TZ="Europe/London" date +"%H")
-          echo "Current London hour: $current_hour"
-          if [ "$current_hour" != "17" ] && [ "${{ github.event_name }}" == "schedule" ]; then
-            echo "Not 17:xx in London right now — this is the other DST cron slot. Skipping."
-            echo "proceed=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "proceed=true" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Check out repo
-        if: steps.time_check.outputs.proceed == 'true'
         uses: actions/checkout@v4
 
       - name: Set up Python
-        if: steps.time_check.outputs.proceed == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
       - name: Install dependencies
-        if: steps.time_check.outputs.proceed == 'true'
         run: pip install -r requirements.txt
 
       - name: Run daily import, test model, and send Telegram alert
-        if: steps.time_check.outputs.proceed == 'true'
         env:
           POLYGON_API_KEY: ${{ secrets.POLYGON_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -51,7 +40,7 @@ jobs:
         run: python run_daily_test_and_alert.py
 
       - name: Commit and push outputs
-        if: always() && steps.time_check.outputs.proceed == 'true'
+        if: always()
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
