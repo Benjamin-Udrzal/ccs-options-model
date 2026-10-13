@@ -33,5 +33,57 @@
     "entry_back_iv": null,
     "front_ticker": null,
     "back_ticker": null
+  },
+  "SPY|2026-10-13|777.0": {
+    "entry_underlying_price": 778.01,
+    "entry_front_iv": 0.11809994620152206,
+    "entry_back_iv": 0.12655861268204824,
+    "front_ticker": "O:SPY261030C00777000",
+    "back_ticker": "O:SPY261113C00777000",
+    "history": [
+      {
+        "date": "2026-10-13",
+        "mtm_pnl": -51.5
+      }
+    ]
+  },
+  "IWM|2026-10-13|279.0": {
+    "entry_underlying_price": 276.7,
+    "entry_front_iv": 0.17883051067181557,
+    "entry_back_iv": 0.18477651430445713,
+    "front_ticker": "O:IWM261030C00279000",
+    "back_ticker": "O:IWM261113C00279000",
+    "history": [
+      {
+        "date": "2026-10-13",
+        "mtm_pnl": -63.0
+      }
+    ]
+  },
+  "XLF|2026-10-13|55.0": {
+    "entry_underlying_price": 54.82,
+    "entry_front_iv": 0.16182272479021964,
+    "entry_back_iv": 0.17566178855148518,
+    "front_ticker": "O:XLF261030C00055000",
+    "back_ticker": "O:XLF261113C00055000",
+    "history": [
+      {
+        "date": "2026-10-13",
+        "mtm_pnl": 8.0
+      }
+    ]
+  },
+  "TLT|2026-10-13|78.0": {
+    "entry_underlying_price": 78.37,
+    "entry_front_iv": 0.1357004994897922,
+    "entry_back_iv": 0.11683704063559468,
+    "front_ticker": "O:TLT261030C00078000",
+    "back_ticker": "O:TLT261113C00078000",
+    "history": [
+      {
+        "date": "2026-10-13",
+        "mtm_pnl": -5.1
+      }
+    ]
   }
 }
