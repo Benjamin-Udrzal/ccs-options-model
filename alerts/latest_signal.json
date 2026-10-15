@@ -1,48 +1,55 @@
 {
-  "date": "2026-10-14",
-  "sent_at": 1792008690.641025,
+  "date": "2026-10-15",
+  "sent_at": 1792094027.882119,
   "positions": [
     {
       "ticker": "SPY",
-      "strike": 771.0,
+      "strike": 770.0,
       "short_call_expiry": "2026-11-06",
       "long_call_expiry": "2026-11-20",
-      "day_1_cashflow": -403.1
-    },
-    {
-      "ticker": "QQQ",
-      "strike": 732.0,
-      "short_call_expiry": "2026-11-06",
-      "long_call_expiry": "2026-11-20",
-      "day_1_cashflow": -456.2
+      "day_1_cashflow": -403.0
     },
     {
       "ticker": "DIA",
-      "strike": 515.0,
+      "strike": 520.0,
       "short_call_expiry": "2026-11-06",
       "long_call_expiry": "2026-11-20",
-      "day_1_cashflow": -254.2
+      "day_1_cashflow": -209.4
     },
     {
-      "ticker": "XLF",
-      "strike": 54.0,
+      "ticker": "XLE",
+      "strike": 67.0,
       "short_call_expiry": "2026-11-06",
       "long_call_expiry": "2026-11-20",
-      "day_1_cashflow": -40.4
+      "day_1_cashflow": -43.8
     },
     {
-      "ticker": "GLD",
-      "strike": 373.0,
+      "ticker": "XLV",
+      "strike": 179.0,
       "short_call_expiry": "2026-11-06",
       "long_call_expiry": "2026-11-20",
-      "day_1_cashflow": -246.4
+      "day_1_cashflow": -71.7
     },
     {
       "ticker": "TLT",
-      "strike": 78.0,
+      "strike": 80.0,
       "short_call_expiry": "2026-11-06",
       "long_call_expiry": "2026-11-20",
-      "day_1_cashflow": -30.7
+      "day_1_cashflow": -33.2
+    },
+    {
+      "ticker": "XLP",
+      "strike": 87.0,
+      "short_call_expiry": "2026-11-06",
+      "long_call_expiry": "2026-11-20",
+      "day_1_cashflow": -4.9
+    },
+    {
+      "ticker": "SLV",
+      "strike": 51.0,
+      "short_call_expiry": "2026-11-06",
+      "long_call_expiry": "2026-11-20",
+      "day_1_cashflow": -68.3
     }
   ]
 }
