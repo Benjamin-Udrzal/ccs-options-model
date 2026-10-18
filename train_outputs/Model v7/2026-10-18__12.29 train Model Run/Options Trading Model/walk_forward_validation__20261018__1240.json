@@ -1,0 +1,80 @@
+{
+    "timestamp": "20261018__1240",
+    "folds": [
+        {
+            "fold": 1,
+            "train_start": "2021-01-27",
+            "train_end": "2023-11-30",
+            "test_start": "2023-11-30",
+            "test_end": "2024-06-20",
+            "n_train": 1237,
+            "n_test": 247,
+            "auc": 0.6138067061143984,
+            "accuracy": 0.5789473684210527,
+            "null_auc_mean": 0.4853254437869823,
+            "null_auc_p90": 0.5160486522024984,
+            "percentile_rank_vs_null": 1.0,
+            "beats_null_p90": true
+        },
+        {
+            "fold": 2,
+            "train_start": "2021-01-27",
+            "train_end": "2024-06-20",
+            "test_start": "2024-06-20",
+            "test_end": "2025-01-31",
+            "n_train": 1484,
+            "n_test": 247,
+            "auc": 0.5670130562216893,
+            "accuracy": 0.4898785425101215,
+            "null_auc_mean": 0.5152677857713829,
+            "null_auc_p90": 0.5936584066080469,
+            "percentile_rank_vs_null": 0.75,
+            "beats_null_p90": false
+        },
+        {
+            "fold": 3,
+            "train_start": "2021-01-27",
+            "train_end": "2025-01-31",
+            "test_start": "2025-01-31",
+            "test_end": "2025-09-15",
+            "n_train": 1731,
+            "n_test": 247,
+            "auc": 0.5584102769971899,
+            "accuracy": 0.5020242914979757,
+            "null_auc_mean": 0.5114378429011107,
+            "null_auc_p90": 0.565863776261207,
+            "percentile_rank_vs_null": 0.75,
+            "beats_null_p90": false
+        },
+        {
+            "fold": 4,
+            "train_start": "2021-01-27",
+            "train_end": "2025-09-15",
+            "test_start": "2025-09-15",
+            "test_end": "2026-03-30",
+            "n_train": 1978,
+            "n_test": 247,
+            "auc": 0.5714093598708984,
+            "accuracy": 0.5101214574898786,
+            "null_auc_mean": 0.48429263044647664,
+            "null_auc_p90": 0.5417630446476601,
+            "percentile_rank_vs_null": 0.9,
+            "beats_null_p90": true
+        },
+        {
+            "fold": 5,
+            "train_start": "2021-01-27",
+            "train_end": "2026-03-30",
+            "test_start": "2026-03-30",
+            "test_end": "2026-09-28",
+            "n_train": 2225,
+            "n_test": 247,
+            "auc": 0.5702104982680523,
+            "accuracy": 0.5263157894736842,
+            "null_auc_mean": 0.49871436184385826,
+            "null_auc_p90": 0.5552691180389021,
+            "percentile_rank_vs_null": 0.95,
+            "beats_null_p90": true
+        }
+    ]
+}
