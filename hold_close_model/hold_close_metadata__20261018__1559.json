@@ -1,0 +1,32 @@
+{
+  "features": [
+    "days_held",
+    "days_to_front_expiry",
+    "days_to_back_expiry",
+    "mtm_pnl_pct_of_debit",
+    "drawdown_from_peak",
+    "mtm_pnl_chg_1d",
+    "mtm_pnl_chg_3d",
+    "underlying_move_pct",
+    "front_iv",
+    "back_iv",
+    "front_iv_change",
+    "back_iv_change",
+    "front_theta",
+    "back_theta"
+  ],
+  "timestamp": "20261018__1559",
+  "metrics": {
+    "accuracy": 0.7018361993587875,
+    "auc": 0.7662350245614862,
+    "n_test_rows": 6862,
+    "n_test_positions": 493
+  },
+  "policy_comparison": {
+    "always_hold_total_pnl": 14140.2,
+    "model_policy_total_pnl": 21100.2,
+    "simple_drawdown_rule_total_pnl": -17142.8,
+    "n_positions_compared": 493
+  },
+  "C": 0.5
+}
