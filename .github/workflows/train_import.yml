@@ -66,10 +66,30 @@ jobs:
             return 1
           }
 
-          # sort -z puts the files the pipeline actually reads (1., 2., 3.) first, so if a
-          # later, less important file fails, the folder is still usable by train_model().
+          # GitHub permanently rejects any file over 100 MB (error GH001) — retrying can never
+          # help, and the rejected commit would also block every later push. So files over
+          # ~95 MB are never committed:
+          #   - the 3 files the pipeline reads (1., 2., 3.) are essential: too big = fail loudly
+          #   - everything else is a raw intermediate nothing downstream reads: skip with a warning
+          MAX_BYTES=$((95 * 1024 * 1024))
+          ESSENTIAL_RE='/(1\.CCS_Testing_Data|2\.CCS_Training_Data|3\.CCS_Summary_Data)[^/]*\.csv$'
+          skipped=0
           committed=0
+
+          # sort -z puts the essential files (1., 2., 3.) first, so if a later file does fail,
+          # the folder is still usable by train_model().
           while IFS= read -r -d '' f; do
+            size=$(stat -c%s "$f")
+            if [ "$size" -gt "$MAX_BYTES" ]; then
+              size_mb=$((size / 1024 / 1024))
+              if [[ "$f" =~ $ESSENTIAL_RE ]]; then
+                echo "::error::$(basename "$f") is ${size_mb} MB, over GitHub's 100 MB limit, and train_model() needs it. Needs Git LFS or a smaller dataset."
+                exit 1
+              fi
+              echo "::warning::Skipping $(basename "$f") (${size_mb} MB) - over GitHub's 100 MB file limit. It is a raw intermediate the pipeline does not read."
+              skipped=$((skipped + 1))
+              continue
+            fi
             git add -- "$f"
             if git diff --cached --quiet; then continue; fi
             git commit -q -m "Train data import: $(basename "$f") ($(date -u +'%Y-%m-%d %H:%M UTC'))"
@@ -77,4 +97,4 @@ jobs:
             committed=$((committed + 1))
           done < <(find train_outputs -type f "${FIND_ARGS[@]}" -print0 | sort -z)
 
-          if [ "$committed" -eq 0 ]; then echo "No changes to commit"; fi
+          echo "Committed $committed file(s); skipped $skipped oversize file(s)."
