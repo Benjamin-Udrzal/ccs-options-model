@@ -1,7 +1,12 @@
 name: Train Data Import
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      essential_files_only:
+        description: "Only commit the 3 CSVs the pipeline reads (testing, training, summary) and skip the large raw intermediates"
+        type: boolean
+        default: false
   # No schedule by default — generating a fresh training dataset is a bigger, less routine
   # operation than the daily test import, so this only runs when you click "Run workflow".
   # Add a schedule trigger here (same syntax as daily_import.yml) if you'd like it automatic.
@@ -30,9 +35,46 @@ jobs:
         run: python run_train_import.py
 
       - name: Commit and push CSV outputs
+        env:
+          ESSENTIAL_ONLY: ${{ inputs.essential_files_only }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git diff --cached --quiet && echo "No changes to commit" || git commit -m "Train data import $(date -u +'%Y-%m-%d %H:%M UTC')"
-          git push
+          # A single push of all the CSVs together can exceed GitHub's request timeout
+          # (HTTP 408 / "unexpected disconnect while reading sideband packet"), so this
+          # commits and pushes ONE FILE AT A TIME, retrying each push if it fails.
+          git config http.postBuffer 524288000
+
+          if [ "$ESSENTIAL_ONLY" = "true" ]; then
+            echo "essential_files_only is on: committing only 1.CCS_Testing_Data, 2.CCS_Training_Data and 3.CCS_Summary_Data."
+            FIND_ARGS=( \( -name '1.CCS_Testing_Data*.csv' -o -name '2.CCS_Training_Data*.csv' -o -name '3.CCS_Summary_Data*.csv' \) )
+          else
+            FIND_ARGS=( -name '*.csv' )
+          fi
+
+          echo "Output sizes (GitHub rejects any single file over 100 MB):"
+          find train_outputs -type f "${FIND_ARGS[@]}" -exec du -h {} +
+
+          push_with_retry() {
+            for attempt in 1 2 3 4; do
+              if git pull --rebase origin master && git push origin HEAD:master; then
+                return 0
+              fi
+              echo "Push attempt $attempt failed; retrying in $((attempt*15))s..."
+              sleep $((attempt*15))
+            done
+            return 1
+          }
+
+          # sort -z puts the files the pipeline actually reads (1., 2., 3.) first, so if a
+          # later, less important file fails, the folder is still usable by train_model().
+          committed=0
+          while IFS= read -r -d '' f; do
+            git add -- "$f"
+            if git diff --cached --quiet; then continue; fi
+            git commit -q -m "Train data import: $(basename "$f") ($(date -u +'%Y-%m-%d %H:%M UTC'))"
+            push_with_retry
+            committed=$((committed + 1))
+          done < <(find train_outputs -type f "${FIND_ARGS[@]}" -print0 | sort -z)
+
+          if [ "$committed" -eq 0 ]; then echo "No changes to commit"; fi
