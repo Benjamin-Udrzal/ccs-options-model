@@ -1,48 +1,13 @@
 {
-  "date": "2026-10-19",
-  "sent_at": 1792443721.612582,
+  "date": "2026-10-20",
+  "sent_at": 1792524230.046177,
   "positions": [
     {
-      "ticker": "QQQ",
-      "strike": 722.0,
-      "short_call_expiry": "2026-11-06",
-      "long_call_expiry": "2026-11-27",
-      "day_1_cashflow": -716.7
-    },
-    {
-      "ticker": "DIA",
-      "strike": 519.0,
-      "short_call_expiry": "2026-11-06",
-      "long_call_expiry": "2026-11-27",
-      "day_1_cashflow": -388.9
-    },
-    {
       "ticker": "XLF",
-      "strike": 55.0,
-      "short_call_expiry": "2026-11-06",
+      "strike": 56.0,
+      "short_call_expiry": "2026-11-13",
       "long_call_expiry": "2026-11-27",
-      "day_1_cashflow": -37.2
-    },
-    {
-      "ticker": "TLT",
-      "strike": 80.0,
-      "short_call_expiry": "2026-11-06",
-      "long_call_expiry": "2026-11-27",
-      "day_1_cashflow": -41.0
-    },
-    {
-      "ticker": "XLP",
-      "strike": 87.0,
-      "short_call_expiry": "2026-11-06",
-      "long_call_expiry": "2026-11-27",
-      "day_1_cashflow": -75.8
-    },
-    {
-      "ticker": "FXI",
-      "strike": 34.0,
-      "short_call_expiry": "2026-11-06",
-      "long_call_expiry": "2026-11-27",
-      "day_1_cashflow": -19.7
+      "day_1_cashflow": -18.9
     }
   ]
 }
