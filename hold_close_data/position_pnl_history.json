@@ -85,5 +85,18 @@
         "mtm_pnl": -5.1
       }
     ]
+  },
+  "XLF|2026-10-20|56.0": {
+    "entry_underlying_price": 55.72,
+    "entry_front_iv": 0.15233940485688793,
+    "entry_back_iv": 0.15533397915503536,
+    "front_ticker": "O:XLF261113C00056000",
+    "back_ticker": "O:XLF261127C00056000",
+    "history": [
+      {
+        "date": "2026-10-21",
+        "mtm_pnl": 2.0
+      }
+    ]
   }
 }
