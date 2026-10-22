@@ -96,6 +96,82 @@
       {
         "date": "2026-10-21",
         "mtm_pnl": 2.0
+      },
+      {
+        "date": "2026-10-22",
+        "mtm_pnl": -10.0
+      }
+    ]
+  },
+  "DIA|2026-10-21|526.0": {
+    "entry_underlying_price": 527.7,
+    "entry_front_iv": 0.11301687171469205,
+    "entry_back_iv": 0.11097510815784885,
+    "front_ticker": "O:DIA261113C00526000",
+    "back_ticker": "O:DIA261127C00526000",
+    "history": [
+      {
+        "date": "2026-10-22",
+        "mtm_pnl": -23.0
+      }
+    ]
+  },
+  "GLD|2026-10-21|379.0": {
+    "entry_underlying_price": 378.95,
+    "entry_front_iv": 0.18864616570072615,
+    "entry_back_iv": 0.19313022598408505,
+    "front_ticker": "O:GLD261113C00379000",
+    "back_ticker": "O:GLD261127C00379000",
+    "history": [
+      {
+        "date": "2026-10-22",
+        "mtm_pnl": -19.0
+      }
+    ]
+  },
+  "XLE|2026-10-21|68.0": {
+    "entry_underlying_price": 68.16,
+    "entry_front_iv": 0.3015981881632228,
+    "entry_back_iv": 0.32645390106929234,
+    "front_ticker": "O:XLE261113C00068000",
+    "back_ticker": "O:XLE261127C00068000",
+    "history": [
+      {
+        "date": "2026-10-22",
+        "mtm_pnl": -12.0
+      }
+    ]
+  },
+  "XLB|2026-10-21|51.0": {
+    "entry_underlying_price": 51.32,
+    "entry_front_iv": 0.19029453980028357,
+    "entry_back_iv": 0.16610036988821242,
+    "front_ticker": "O:XLB261113C00051000",
+    "back_ticker": "O:XLB261127C00051000"
+  },
+  "XLF|2026-10-22|57.0": {
+    "entry_underlying_price": 56.65,
+    "entry_front_iv": 0.16324571629345302,
+    "entry_back_iv": 0.149633466926612,
+    "front_ticker": "O:XLF261113C00057000",
+    "back_ticker": "O:XLF261127C00057000",
+    "history": [
+      {
+        "date": "2026-10-22",
+        "mtm_pnl": -8.0
+      }
+    ]
+  },
+  "TLT|2026-10-22|81.0": {
+    "entry_underlying_price": 81.74,
+    "entry_front_iv": 0.12207516228379317,
+    "entry_back_iv": 0.11171648200571732,
+    "front_ticker": "O:TLT261113C00081000",
+    "back_ticker": "O:TLT261127C00081000",
+    "history": [
+      {
+        "date": "2026-10-22",
+        "mtm_pnl": -8.0
       }
     ]
   }
