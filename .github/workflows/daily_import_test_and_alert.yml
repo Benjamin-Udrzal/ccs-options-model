@@ -1,17 +1,6 @@
 name: Daily Test and Alert
 
 on:
-  schedule:
-    # UK clocks change twice a year (BST in summer, GMT in winter), but cron only runs in UTC —
-    # so we schedule BOTH possible UTC times for "17:07 Europe/London". There's no longer a
-    # clock-based guard step to pick between them: run_daily_test_and_alert.py itself decides,
-    # via alerts/alert_log.json, whether today's alert has already been sent. Whichever of these
-    # two cron slots fires FIRST on a given day does the real work (regardless of how late a
-    # delayed GitHub Actions scheduler actually runs it); the other is a same-day repeat and
-    # exits immediately without re-running the import/test. See run_daily_test_and_alert.py for
-    # the actual dedup logic.
-    - cron: "7 16 * * 1-5"  # = 17:07 London during BST (late Mar - late Oct)
-    - cron: "7 17 * * 1-5"  # = 17:07 London during GMT (late Oct - late Mar)
   workflow_dispatch: {}
 
 permissions:
