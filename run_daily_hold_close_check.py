@@ -109,7 +109,15 @@ def get_or_init_entry_data(client, state, position_id, record):
     return entry_stock, entry_front_iv, entry_back_iv, front_ticker, back_ticker
 
 
+def fmt_money(value):
+    """Signed dollar amount, e.g. +$123.45 / -$12.30 (plain f"${-12.3:.2f}" gives "$-12.30")."""
+    sign = "-" if value < 0 else "+"
+    return f"{sign}${abs(value):,.2f}"
+
+
 def format_recommendations_message(recommendations):
+    """The daily digest: every open position, one line each, grouped into close / keep.
+    Positions flagged for closing ALSO get their own detailed alert (format_close_alert_message)."""
     if not recommendations:
         return "📋 <b>Hold/Close Check</b>\n\nNo open positions to check today."
 
@@ -119,11 +127,11 @@ def format_recommendations_message(recommendations):
     lines = [f"📋 <b>Hold/Close Check — {len(recommendations)} open position(s)</b>\n"]
 
     if close_recs:
-        lines.append(f"⚠️ <b>Consider closing ({len(close_recs)}):</b>")
+        lines.append(f"⚠️ <b>Consider closing ({len(close_recs)}) — details in the alert below:</b>")
         for r in close_recs:
             lines.append(
                 f"• {r['ticker']} strike ${r['strike']:.2f} (expiry {r['short_call_expiry']}) — "
-                f"current P&L ${r['mtm_pnl']:.2f}, close confidence {r['close_probability']:.0%}"
+                f"current P&L {fmt_money(r['mtm_pnl'])}, close confidence {r['close_probability']:.0%}"
             )
         lines.append("")
 
@@ -132,17 +140,71 @@ def format_recommendations_message(recommendations):
         for r in hold_recs:
             lines.append(
                 f"• {r['ticker']} strike ${r['strike']:.2f} (expiry {r['short_call_expiry']}) — "
-                f"current P&L ${r['mtm_pnl']:.2f}, close confidence {r['close_probability']:.0%}"
+                f"current P&L {fmt_money(r['mtm_pnl'])}, close confidence {r['close_probability']:.0%}"
             )
 
     return "\n".join(lines)
 
 
+def format_close_alert_message(close_recs, today):
+    """A dedicated alert, sent ONLY on days at least one position is flagged to close, with
+    what you need to act on it: the confidence, what closing right now would pay out, the
+    resulting profit, and a ready-to-send "closed ..." reply for the tracker.
+
+    Figures use today's closing-bar prices (same basis the model was trained on and the same
+    convention as func_import.py), not live bid/ask, so real fills will differ a little."""
+    if not close_recs:
+        return None
+
+    # Most confident first
+    close_recs = sorted(close_recs, key=lambda r: r["close_probability"], reverse=True)
+
+    blocks = [f"🚨 <b>CLOSE ALERT — {today.isoformat()}</b>\n"
+              f"{len(close_recs)} position(s) the model says to close today:"]
+
+    for i, r in enumerate(close_recs, start=1):
+        reason = "Lock in profit" if r["mtm_pnl"] > 0 else "Limit the loss"
+        profit_cmd = f"{r['mtm_pnl']:.2f}"
+        # Only mention the peak if the position has actually been in profit; "peak: -$45" is noise.
+        # (It's the best P&L seen on days this check ran, so it can understate the true intraday peak.)
+        peak_text = f"  |  Peak P&L seen: {fmt_money(r['peak_mtm_pnl'])}" if r["peak_mtm_pnl"] > 0 else ""
+        blocks.append(
+            f"<b>{i}. {r['ticker']}</b> — strike ${r['strike']:.2f}  ({reason})\n"
+            f"   Close confidence: <b>{r['close_probability']:.0%}</b>\n"
+            f"   Cashflow if closed now: <b>{fmt_money(r['exit_cashflow_today'])}</b>"
+            f" (sell long call, buy back short call)\n"
+            f"   Expected profit: <b>{fmt_money(r['mtm_pnl'])}</b>"
+            f" (entry cashflow {fmt_money(r['entry_cashflow'])})\n"
+            f"   Short call expiry: {r['short_call_expiry']}  |  Long call expiry: {r['long_call_expiry']}\n"
+            f"   Opened {r['date_opened']} ({r['days_held']} days ago){peak_text}\n"
+            f"   Once closed, reply: <code>closed {r['strike']:g} {r['ticker']} {profit_cmd}</code>"
+            f" (swap in your actual profit)"
+        )
+
+    blocks.append("<i>Based on today's closing prices; actual fills will differ.</i>")
+    return "\n\n".join(blocks)
+
+
 def send_telegram_message(bot_token, chat_id, text):
+    """Send `text`, splitting on blank lines into chunks under Telegram's 4096-char cap
+    (splitting on message-block boundaries rather than mid-text, so HTML tags never get cut)."""
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-    resp = requests.post(url, data={"chat_id": chat_id, "text": text, "parse_mode": "HTML"})
-    if resp.status_code != 200:
-        print(f"WARNING: Telegram send failed ({resp.status_code}): {resp.text}")
+    max_len = 3500
+    chunks, current = [], ""
+    for block in text.split("\n\n"):
+        candidate = f"{current}\n\n{block}" if current else block
+        if len(candidate) > max_len and current:
+            chunks.append(current)
+            current = block
+        else:
+            current = candidate
+    if current:
+        chunks.append(current)
+
+    for chunk in chunks:
+        resp = requests.post(url, data={"chat_id": chat_id, "text": chunk, "parse_mode": "HTML"})
+        if resp.status_code != 200:
+            print(f"WARNING: Telegram send failed ({resp.status_code}): {resp.text}")
 
 
 def check_open_positions(polygon_api_key, sheet, pipeline, metadata, state, today=None):
@@ -205,6 +267,16 @@ def check_open_positions(polygon_api_key, sheet, pipeline, metadata, state, toda
             "ticker": ticker, "strike": strike, "short_call_expiry": record["Short Call Expiry"],
             "mtm_pnl": feats["mtm_pnl"], "close_probability": float(close_probability),
             "recommend_close": bool(close_probability > 0.5),
+            # Extra detail for the close alert (none of this feeds the model):
+            "long_call_expiry": record["Long Call Expiry"],
+            "date_opened": entry_date.isoformat(),
+            "days_held": feats["days_held"],
+            "entry_cashflow": entry_cashflow,
+            # What closing right now would pay out — same formula as func_import's Day_2_Cashflow
+            # and compute_snapshot_features' mtm calculation: sell the long (back) call, buy back
+            # the short (front) call. Expected profit (mtm_pnl) = entry_cashflow + this.
+            "exit_cashflow_today": round(100 * (back_today - front_today), 2),
+            "peak_mtm_pnl": feats["peak_mtm_pnl_so_far"],
         })
 
     return recommendations, state
@@ -237,10 +309,25 @@ def main():
     recommendations, state = check_open_positions(polygon_api_key, sheet, pipeline, metadata, state)
     save_state(state)
 
-    message = format_recommendations_message(recommendations)
-    send_telegram_message(bot_token, chat_id, message)
+    close_recs = [r for r in recommendations if r["recommend_close"]]
+
+    # Wrapped so a Telegram/formatting problem can't make the script exit non-zero — the
+    # position history was already saved above, and a failed run could skip the workflow's
+    # commit step and lose a day of history.
+    try:
+        # 1. The daily digest (every open position, one line each)
+        send_telegram_message(bot_token, chat_id, format_recommendations_message(recommendations))
+
+        # 2. A separate, detailed alert — only on days something should be closed. Sent last so
+        #    it's the message you see at the bottom of the chat.
+        close_alert = format_close_alert_message(close_recs, datetime.date.today())
+        if close_alert:
+            send_telegram_message(bot_token, chat_id, close_alert)
+    except Exception as e:
+        print(f"WARNING: Telegram message failed, but position history was saved. Error: {e}")
+
     print(f"Checked {len(recommendations)} open position(s); "
-          f"{sum(r['recommend_close'] for r in recommendations)} recommended for closing.")
+          f"{len(close_recs)} recommended for closing.")
 
 
 if __name__ == "__main__":
