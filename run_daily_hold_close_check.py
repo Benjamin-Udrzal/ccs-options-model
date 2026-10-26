@@ -115,16 +115,19 @@ def fmt_money(value):
     return f"{sign}${abs(value):,.2f}"
 
 
-def format_recommendations_message(recommendations):
-    """The daily digest: every open position, one line each, grouped into close / keep.
-    Positions flagged for closing ALSO get their own detailed alert (format_close_alert_message)."""
-    if not recommendations:
+def format_recommendations_message(recommendations, skipped=None):
+    """The daily digest: EVERY open position, one line each, grouped into close / keep /
+    couldn't assess (with a short reason). Positions flagged for closing ALSO get their own
+    detailed alert (format_close_alert_message)."""
+    skipped = skipped or []
+    total = len(recommendations) + len(skipped)
+    if total == 0:
         return "📋 <b>Hold/Close Check</b>\n\nNo open positions to check today."
 
     close_recs = [r for r in recommendations if r["recommend_close"]]
     hold_recs = [r for r in recommendations if not r["recommend_close"]]
 
-    lines = [f"📋 <b>Hold/Close Check — {len(recommendations)} open position(s)</b>\n"]
+    lines = [f"📋 <b>Hold/Close Check — {total} open position(s)</b>\n"]
 
     if close_recs:
         lines.append(f"⚠️ <b>Consider closing ({len(close_recs)}) — details in the alert below:</b>")
@@ -142,8 +145,15 @@ def format_recommendations_message(recommendations):
                 f"• {r['ticker']} strike ${r['strike']:.2f} (expiry {r['short_call_expiry']}) — "
                 f"current P&L {fmt_money(r['mtm_pnl'])}, close confidence {r['close_probability']:.0%}"
             )
+        lines.append("")
 
-    return "\n".join(lines)
+    if skipped:
+        lines.append(f"❓ <b>Couldn't assess ({len(skipped)}) — no recommendation today:</b>")
+        for s in skipped:
+            strike_text = f"strike ${s['strike']:.2f}" if s["strike"] is not None else "strike ?"
+            lines.append(f"• {s['ticker']} {strike_text} (expiry {s['short_call_expiry']}) — {s['reason']}")
+
+    return "\n".join(lines).rstrip()
 
 
 def format_close_alert_message(close_recs, today):
@@ -207,36 +217,81 @@ def send_telegram_message(bot_token, chat_id, text):
             print(f"WARNING: Telegram send failed ({resp.status_code}): {resp.text}")
 
 
+LAGGED_FEATURE_HINTS = ("1d_ago", "3d_ago", "1d", "3d", "lag")
+
+
+def describe_missing_features(missing_features):
+    """Short, human-readable reason for a position the model couldn't score."""
+    lagged = [f for f in missing_features if any(h in f.lower() for h in LAGGED_FEATURE_HINTS)]
+    other = [f for f in missing_features if f not in lagged]
+    parts = []
+    if lagged:
+        parts.append("not enough days of history yet")
+    if other:
+        parts.append("missing data: " + ", ".join(other))
+    return "; ".join(parts) if parts else "missing model inputs"
+
+
 def check_open_positions(polygon_api_key, sheet, pipeline, metadata, state, today=None):
     """Core logic, kept separate from main() so it's testable without real API calls. Returns
-    (recommendations list, updated state)."""
+    (recommendations list, skipped list, updated state). Every open row ends up in exactly one
+    of the first two lists; `skipped` entries carry a short plain-English `reason`."""
     today = today or datetime.date.today()
     client = RESTClient(polygon_api_key, retries=5)
     features_needed = metadata["features"]
 
     open_positions = get_open_positions(sheet)
     recommendations = []
+    skipped = []
 
     for record in open_positions:
-        ticker = record["Ticker"]
-        strike = float(record["Strike"])
-        entry_date = datetime.date.fromisoformat(str(record["Date Opened"]))
-        front_expiry = datetime.date.fromisoformat(str(record["Short Call Expiry"]))
-        back_expiry = datetime.date.fromisoformat(str(record["Long Call Expiry"]))
-        entry_cashflow = float(record["Entry Cashflow"])
+        def skip(reason):
+            print(f"  WARNING: {record.get('Ticker')} {record.get('Strike')} — {reason}; skipping.")
+            try:
+                strike_val = float(record.get("Strike"))
+            except (TypeError, ValueError):
+                strike_val = None
+            skipped.append({
+                "ticker": record.get("Ticker"), "strike": strike_val,
+                "short_call_expiry": record.get("Short Call Expiry"), "reason": reason,
+            })
+
+        try:
+            ticker = record["Ticker"]
+            strike = float(record["Strike"])
+            entry_date = datetime.date.fromisoformat(str(record["Date Opened"]))
+            front_expiry = datetime.date.fromisoformat(str(record["Short Call Expiry"]))
+            back_expiry = datetime.date.fromisoformat(str(record["Long Call Expiry"]))
+            entry_cashflow = float(record["Entry Cashflow"])
+        except (KeyError, TypeError, ValueError):
+            skip("sheet row has a missing or invalid date, strike or cashflow")
+            continue
         position_id = f"{ticker}|{entry_date.isoformat()}|{strike}"
 
-        entry_stock, entry_front_iv, entry_back_iv, front_ticker, back_ticker = get_or_init_entry_data(
-            client, state, position_id, record)
-        if front_ticker is None or back_ticker is None or entry_stock is None:
-            print(f"  WARNING: could not resolve contracts/entry data for {ticker} {strike} — skipping.")
+        try:
+            entry_stock, entry_front_iv, entry_back_iv, front_ticker, back_ticker = get_or_init_entry_data(
+                client, state, position_id, record)
+        except Exception as e:
+            skip(f"entry-data lookup failed ({type(e).__name__})")
+            continue
+        if front_ticker is None or back_ticker is None:
+            skip("couldn't find the option contracts on Polygon")
+            continue
+        if entry_stock is None:
+            skip("no stock price found for the entry date")
             continue
 
-        stock_today = get_stock_close(client, ticker, today)
-        front_today = get_daily_close(client, front_ticker, today)
-        back_today = get_daily_close(client, back_ticker, today)
-        if stock_today is None or front_today is None or back_today is None:
-            print(f"  WARNING: missing today's price data for {ticker} {strike} — skipping.")
+        try:
+            stock_today = get_stock_close(client, ticker, today)
+            front_today = get_daily_close(client, front_ticker, today)
+            back_today = get_daily_close(client, back_ticker, today)
+        except Exception as e:
+            skip(f"today's price lookup failed ({type(e).__name__})")
+            continue
+        missing_prices = [name for name, val in [("stock", stock_today), ("short call", front_today),
+                                                 ("long call", back_today)] if val is None]
+        if missing_prices:
+            skip("no price today for the " + " and ".join(missing_prices) + " (not traded or no data yet)")
             continue
 
         history = state[position_id].get("history", [])
@@ -253,13 +308,15 @@ def check_open_positions(polygon_api_key, sheet, pipeline, metadata, state, toda
         )
 
         if feats["mtm_pnl"] is None:
+            skip("couldn't calculate today's P&L from the prices")
             continue
 
         state[position_id].setdefault("history", []).append({"date": today.isoformat(), "mtm_pnl": feats["mtm_pnl"]})
 
         row_df = pd.DataFrame([{f: feats.get(f) for f in features_needed}])
         if row_df.isna().any(axis=None):
-            print(f"  WARNING: missing feature value(s) for {ticker} {strike} — skipping model prediction.")
+            missing_features = [f for f in features_needed if pd.isna(row_df[f].iloc[0])]
+            skip(describe_missing_features(missing_features))
             continue
 
         close_probability = pipeline.predict_proba(row_df[features_needed])[0, 1]
@@ -279,7 +336,7 @@ def check_open_positions(polygon_api_key, sheet, pipeline, metadata, state, toda
             "peak_mtm_pnl": feats["peak_mtm_pnl_so_far"],
         })
 
-    return recommendations, state
+    return recommendations, skipped, state
 
 
 def main():
@@ -306,7 +363,7 @@ def main():
     sheet = gc.open_by_key(sheet_id)
 
     state = load_state()
-    recommendations, state = check_open_positions(polygon_api_key, sheet, pipeline, metadata, state)
+    recommendations, skipped, state = check_open_positions(polygon_api_key, sheet, pipeline, metadata, state)
     save_state(state)
 
     close_recs = [r for r in recommendations if r["recommend_close"]]
@@ -316,7 +373,7 @@ def main():
     # commit step and lose a day of history.
     try:
         # 1. The daily digest (every open position, one line each)
-        send_telegram_message(bot_token, chat_id, format_recommendations_message(recommendations))
+        send_telegram_message(bot_token, chat_id, format_recommendations_message(recommendations, skipped))
 
         # 2. A separate, detailed alert — only on days something should be closed. Sent last so
         #    it's the message you see at the bottom of the chat.
@@ -326,8 +383,9 @@ def main():
     except Exception as e:
         print(f"WARNING: Telegram message failed, but position history was saved. Error: {e}")
 
-    print(f"Checked {len(recommendations)} open position(s); "
-          f"{len(close_recs)} recommended for closing.")
+    print(f"Checked {len(recommendations) + len(skipped)} open position(s): "
+          f"{len(recommendations)} assessed ({len(close_recs)} recommended for closing), "
+          f"{len(skipped)} could not be assessed.")
 
 
 if __name__ == "__main__":
