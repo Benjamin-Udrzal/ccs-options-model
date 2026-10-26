@@ -1,392 +1,202 @@
 """
-Entry point for the "Daily Hold/Close Check" GitHub Actions workflow.
+Shared logic for the hold/close model: fetching option contracts and prices from Polygon,
+computing IV/Greeks, and building the feature set for a position on a given day.
 
-For every OPEN position in your Google Sheet tracker, fetches today's prices, computes the
-same features the model was trained on, and sends a Telegram message recommending "keep
-holding" or "consider closing" for each — purely advisory, this never touches the sheet
-itself. You'd act on a recommendation the same way as any other close, via the existing
-"closed <strike> <ticker> <profit>" Telegram command.
+Used by BOTH build_hold_close_dataset.py (historical, day-by-day over completed positions)
+and run_daily_hold_close_check.py (live, one snapshot per open position per day) — keeping
+this in one shared module guarantees the features the model was trained on and the features
+it sees at inference time are computed identically.
 
-WHY THIS NEEDS ITS OWN STATE FILE: the model needs each position's peak P&L so far and its
-P&L 1/3 days ago, but the tracker sheet doesn't store daily history (only entry and exit).
-Rather than changing the sheet schema or the existing alert/import scripts, this keeps its
-own small history file (hold_close_data/position_pnl_history.json), appended to each day this
-runs and committed back to the repo like the other state files in this repo. It also caches
-each position's ENTRY-day prices/IV the first time it's seen, so they're only fetched once
-per position rather than re-fetched every single day.
+Deliberately does NOT import or call func_import.py — it only reads func_import's OUTPUT CSVs
+(via build_hold_close_dataset.py) and replicates func_import's exact pricing/IV formulas
+here as pure, self-contained functions. This means nothing here can ever break func_import's
+own behaviour, at the cost of keeping these formulas in sync by hand if func_import.py's
+conventions ever change.
 
-This script does not modify func_import.py, CCS_Model_Train_v7.py, CCS_Model_Test_v7.py,
-run_daily_test_and_alert.py, or check_telegram_replies.py, and does not change what they do.
-
-Requires these GitHub Actions secrets (all already used elsewhere in this repo):
-  POLYGON_API_KEY, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID,
-  GOOGLE_SERVICE_ACCOUNT_JSON, GOOGLE_SHEET_ID
+Pricing convention (matches func_import.py exactly):
+  - Option prices are the day's CLOSING aggregate bar (not real bid/ask).
+  - Call_1 = front/short leg (sold to open), Call_2 = back/long leg (bought to open).
+  - Entry cashflow  = 100 * (front_price_at_entry - back_price_at_entry)
+  - Exit  cashflow  = 100 * (back_price_on_day  - front_price_on_day)   <- if closed on that day
+  - mark-to-market P&L if closed on a given day = entry_cashflow + exit_cashflow_on_that_day
 """
 
-import os
-import sys
-import glob
-import json
-import datetime
-import requests
-import gspread
-import joblib
+import numpy as np
 import pandas as pd
-from polygon import RESTClient
+from py_vollib.black_scholes import implied_volatility
+from py_vollib.black_scholes.greeks import analytical
 
-from hold_close_features import compute_snapshot_features, find_option_contract, get_daily_close, get_stock_close, calculate_iv_and_greeks, MODEL_FEATURES
-
-STATE_PATH = os.path.join("hold_close_data", "position_pnl_history.json")
-SHEET_TAB_NAME = "Open Positions"
+RISK_FREE_RATE = 0.0432  # matches func_import.py's calculate_iv_and_greeks default
 
 
-def find_latest_model(search_root):
-    model_matches = sorted(glob.glob(os.path.join(search_root, "**", "hold_close_model__*.joblib"), recursive=True))
-    if not model_matches:
-        raise FileNotFoundError(f"No hold_close_model__*.joblib found under {search_root}. "
-                                 f"Run build_hold_close_dataset.py and train_hold_close_model.py first.")
-    model_path = model_matches[-1]
-    metadata_path = model_path.replace("hold_close_model__", "hold_close_metadata__").replace(".joblib", ".json")
-    with open(metadata_path) as f:
-        metadata = json.load(f)
-    return joblib.load(model_path), metadata
-
-
-def load_state():
-    if os.path.exists(STATE_PATH):
-        with open(STATE_PATH) as f:
-            return json.load(f)
-    return {}
-
-
-def save_state(state):
-    os.makedirs(os.path.dirname(STATE_PATH), exist_ok=True)
-    with open(STATE_PATH, "w") as f:
-        json.dump(state, f, indent=2, default=str)
-
-
-def get_open_positions(sheet):
+def calculate_iv_and_greeks(S, K, T, option_price, option_type="c", r=RISK_FREE_RATE):
+    """Single-contract version of func_import.py's calculate_iv_and_greeks. Returns a dict;
+    every value is None (with an 'error' key) if py_vollib can't solve for IV (e.g. a price
+    outside the no-arbitrage bounds, which happens for illiquid/stale option quotes)."""
     try:
-        ws = sheet.worksheet(SHEET_TAB_NAME)
-    except gspread.exceptions.WorksheetNotFound:
-        return []
-    records = ws.get_all_records()
-    return [r for r in records if str(r.get("Status", "")).strip().lower() == "open"]
-
-
-def get_or_init_entry_data(client, state, position_id, record):
-    """Fetch and cache entry-day stock price + IV for a position the first time it's seen.
-    On later days, reuses the cached values instead of re-fetching (they never change)."""
-    if position_id in state and "entry_underlying_price" in state[position_id]:
-        e = state[position_id]
-        return e["entry_underlying_price"], e["entry_front_iv"], e["entry_back_iv"], e["front_ticker"], e["back_ticker"]
-
-    ticker = record["Ticker"]
-    strike = float(record["Strike"])
-    entry_date = datetime.date.fromisoformat(str(record["Date Opened"]))
-    front_expiry = datetime.date.fromisoformat(str(record["Short Call Expiry"]))
-    back_expiry = datetime.date.fromisoformat(str(record["Long Call Expiry"]))
-
-    front_ticker = find_option_contract(client, ticker, strike, front_expiry, "call")
-    back_ticker = find_option_contract(client, ticker, strike, back_expiry, "call")
-    entry_stock = get_stock_close(client, ticker, entry_date)
-    entry_front_price = get_daily_close(client, front_ticker, entry_date) if front_ticker else None
-    entry_back_price = get_daily_close(client, back_ticker, entry_date) if back_ticker else None
-
-    entry_front_iv = entry_back_iv = None
-    if entry_stock and entry_front_price:
-        front_T = max((front_expiry - entry_date).days, 0) / 365
-        entry_front_iv = calculate_iv_and_greeks(entry_stock, strike, front_T, entry_front_price, "c")["implied_volatility"]
-    if entry_stock and entry_back_price:
-        back_T = max((back_expiry - entry_date).days, 0) / 365
-        entry_back_iv = calculate_iv_and_greeks(entry_stock, strike, back_T, entry_back_price, "c")["implied_volatility"]
-
-    state.setdefault(position_id, {})
-    state[position_id].update({
-        "entry_underlying_price": entry_stock, "entry_front_iv": entry_front_iv, "entry_back_iv": entry_back_iv,
-        "front_ticker": front_ticker, "back_ticker": back_ticker,
-    })
-    return entry_stock, entry_front_iv, entry_back_iv, front_ticker, back_ticker
-
-
-def fmt_money(value):
-    """Signed dollar amount, e.g. +$123.45 / -$12.30 (plain f"${-12.3:.2f}" gives "$-12.30")."""
-    sign = "-" if value < 0 else "+"
-    return f"{sign}${abs(value):,.2f}"
-
-
-def format_recommendations_message(recommendations, skipped=None):
-    """The daily digest: EVERY open position, one line each, grouped into close / keep /
-    couldn't assess (with a short reason). Positions flagged for closing ALSO get their own
-    detailed alert (format_close_alert_message)."""
-    skipped = skipped or []
-    total = len(recommendations) + len(skipped)
-    if total == 0:
-        return "📋 <b>Hold/Close Check</b>\n\nNo open positions to check today."
-
-    close_recs = [r for r in recommendations if r["recommend_close"]]
-    hold_recs = [r for r in recommendations if not r["recommend_close"]]
-
-    lines = [f"📋 <b>Hold/Close Check — {total} open position(s)</b>\n"]
-
-    if close_recs:
-        lines.append(f"⚠️ <b>Consider closing ({len(close_recs)}) — details in the alert below:</b>")
-        for r in close_recs:
-            lines.append(
-                f"• {r['ticker']} strike ${r['strike']:.2f} (expiry {r['short_call_expiry']}) — "
-                f"current P&L {fmt_money(r['mtm_pnl'])}, close confidence {r['close_probability']:.0%}"
-            )
-        lines.append("")
-
-    if hold_recs:
-        lines.append(f"✅ <b>Keep holding ({len(hold_recs)}):</b>")
-        for r in hold_recs:
-            lines.append(
-                f"• {r['ticker']} strike ${r['strike']:.2f} (expiry {r['short_call_expiry']}) — "
-                f"current P&L {fmt_money(r['mtm_pnl'])}, close confidence {r['close_probability']:.0%}"
-            )
-        lines.append("")
-
-    if skipped:
-        lines.append(f"❓ <b>Couldn't assess ({len(skipped)}) — no recommendation today:</b>")
-        for s in skipped:
-            strike_text = f"strike ${s['strike']:.2f}" if s["strike"] is not None else "strike ?"
-            lines.append(f"• {s['ticker']} {strike_text} (expiry {s['short_call_expiry']}) — {s['reason']}")
-
-    return "\n".join(lines).rstrip()
-
-
-def format_close_alert_message(close_recs, today):
-    """A dedicated alert, sent ONLY on days at least one position is flagged to close, with
-    what you need to act on it: the confidence, what closing right now would pay out, the
-    resulting profit, and a ready-to-send "closed ..." reply for the tracker.
-
-    Figures use today's closing-bar prices (same basis the model was trained on and the same
-    convention as func_import.py), not live bid/ask, so real fills will differ a little."""
-    if not close_recs:
-        return None
-
-    # Most confident first
-    close_recs = sorted(close_recs, key=lambda r: r["close_probability"], reverse=True)
-
-    blocks = [f"🚨 <b>CLOSE ALERT — {today.isoformat()}</b>\n"
-              f"{len(close_recs)} position(s) the model says to close today:"]
-
-    for i, r in enumerate(close_recs, start=1):
-        reason = "Lock in profit" if r["mtm_pnl"] > 0 else "Limit the loss"
-        profit_cmd = f"{r['mtm_pnl']:.2f}"
-        # Only mention the peak if the position has actually been in profit; "peak: -$45" is noise.
-        # (It's the best P&L seen on days this check ran, so it can understate the true intraday peak.)
-        peak_text = f"  |  Peak P&L seen: {fmt_money(r['peak_mtm_pnl'])}" if r["peak_mtm_pnl"] > 0 else ""
-        blocks.append(
-            f"<b>{i}. {r['ticker']}</b> — strike ${r['strike']:.2f}  ({reason})\n"
-            f"   Close confidence: <b>{r['close_probability']:.0%}</b>\n"
-            f"   Cashflow if closed now: <b>{fmt_money(r['exit_cashflow_today'])}</b>"
-            f" (sell long call, buy back short call)\n"
-            f"   Expected profit: <b>{fmt_money(r['mtm_pnl'])}</b>"
-            f" (entry cashflow {fmt_money(r['entry_cashflow'])})\n"
-            f"   Short call expiry: {r['short_call_expiry']}  |  Long call expiry: {r['long_call_expiry']}\n"
-            f"   Opened {r['date_opened']} ({r['days_held']} days ago){peak_text}\n"
-            f"   Once closed, reply: <code>closed {r['strike']:g} {r['ticker']} {profit_cmd}</code>"
-            f" (swap in your actual profit)"
-        )
-
-    blocks.append("<i>Based on today's closing prices; actual fills will differ.</i>")
-    return "\n\n".join(blocks)
-
-
-def send_telegram_message(bot_token, chat_id, text):
-    """Send `text`, splitting on blank lines into chunks under Telegram's 4096-char cap
-    (splitting on message-block boundaries rather than mid-text, so HTML tags never get cut)."""
-    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-    max_len = 3500
-    chunks, current = [], ""
-    for block in text.split("\n\n"):
-        candidate = f"{current}\n\n{block}" if current else block
-        if len(candidate) > max_len and current:
-            chunks.append(current)
-            current = block
-        else:
-            current = candidate
-    if current:
-        chunks.append(current)
-
-    for chunk in chunks:
-        resp = requests.post(url, data={"chat_id": chat_id, "text": chunk, "parse_mode": "HTML"})
-        if resp.status_code != 200:
-            print(f"WARNING: Telegram send failed ({resp.status_code}): {resp.text}")
-
-
-LAGGED_FEATURE_HINTS = ("1d_ago", "3d_ago", "1d", "3d", "lag")
-
-
-def describe_missing_features(missing_features):
-    """Short, human-readable reason for a position the model couldn't score."""
-    lagged = [f for f in missing_features if any(h in f.lower() for h in LAGGED_FEATURE_HINTS)]
-    other = [f for f in missing_features if f not in lagged]
-    parts = []
-    if lagged:
-        parts.append("not enough days of history yet")
-    if other:
-        parts.append("missing data: " + ", ".join(other))
-    return "; ".join(parts) if parts else "missing model inputs"
-
-
-def check_open_positions(polygon_api_key, sheet, pipeline, metadata, state, today=None):
-    """Core logic, kept separate from main() so it's testable without real API calls. Returns
-    (recommendations list, skipped list, updated state). Every open row ends up in exactly one
-    of the first two lists; `skipped` entries carry a short plain-English `reason`."""
-    today = today or datetime.date.today()
-    client = RESTClient(polygon_api_key, retries=5)
-    features_needed = metadata["features"]
-
-    open_positions = get_open_positions(sheet)
-    recommendations = []
-    skipped = []
-
-    for record in open_positions:
-        def skip(reason):
-            print(f"  WARNING: {record.get('Ticker')} {record.get('Strike')} — {reason}; skipping.")
-            try:
-                strike_val = float(record.get("Strike"))
-            except (TypeError, ValueError):
-                strike_val = None
-            skipped.append({
-                "ticker": record.get("Ticker"), "strike": strike_val,
-                "short_call_expiry": record.get("Short Call Expiry"), "reason": reason,
-            })
-
-        try:
-            ticker = record["Ticker"]
-            strike = float(record["Strike"])
-            entry_date = datetime.date.fromisoformat(str(record["Date Opened"]))
-            front_expiry = datetime.date.fromisoformat(str(record["Short Call Expiry"]))
-            back_expiry = datetime.date.fromisoformat(str(record["Long Call Expiry"]))
-            entry_cashflow = float(record["Entry Cashflow"])
-        except (KeyError, TypeError, ValueError):
-            skip("sheet row has a missing or invalid date, strike or cashflow")
-            continue
-        position_id = f"{ticker}|{entry_date.isoformat()}|{strike}"
-
-        try:
-            entry_stock, entry_front_iv, entry_back_iv, front_ticker, back_ticker = get_or_init_entry_data(
-                client, state, position_id, record)
-        except Exception as e:
-            skip(f"entry-data lookup failed ({type(e).__name__})")
-            continue
-        if front_ticker is None or back_ticker is None:
-            skip("couldn't find the option contracts on Polygon")
-            continue
-        if entry_stock is None:
-            skip("no stock price found for the entry date")
-            continue
-
-        try:
-            stock_today = get_stock_close(client, ticker, today)
-            front_today = get_daily_close(client, front_ticker, today)
-            back_today = get_daily_close(client, back_ticker, today)
-        except Exception as e:
-            skip(f"today's price lookup failed ({type(e).__name__})")
-            continue
-        missing_prices = [name for name, val in [("stock", stock_today), ("short call", front_today),
-                                                 ("long call", back_today)] if val is None]
-        if missing_prices:
-            skip("no price today for the " + " and ".join(missing_prices) + " (not traded or no data yet)")
-            continue
-
-        history = state[position_id].get("history", [])
-        peak_so_far = max([entry_cashflow] + [h["mtm_pnl"] for h in history]) if history else entry_cashflow
-        mtm_1d_ago = history[-1]["mtm_pnl"] if len(history) >= 1 else None
-        mtm_3d_ago = history[-3]["mtm_pnl"] if len(history) >= 3 else None
-
-        feats = compute_snapshot_features(
-            snapshot_date=today, entry_date=entry_date, front_expiry=front_expiry, back_expiry=back_expiry,
-            strike=strike, entry_cashflow=entry_cashflow, entry_underlying_price=entry_stock,
-            entry_front_iv=entry_front_iv, entry_back_iv=entry_back_iv,
-            stock_price_today=stock_today, front_price_today=front_today, back_price_today=back_today,
-            peak_mtm_pnl_so_far=peak_so_far, mtm_pnl_1d_ago=mtm_1d_ago, mtm_pnl_3d_ago=mtm_3d_ago,
-        )
-
-        if feats["mtm_pnl"] is None:
-            skip("couldn't calculate today's P&L from the prices")
-            continue
-
-        state[position_id].setdefault("history", []).append({"date": today.isoformat(), "mtm_pnl": feats["mtm_pnl"]})
-
-        row_df = pd.DataFrame([{f: feats.get(f) for f in features_needed}])
-        if row_df.isna().any(axis=None):
-            missing_features = [f for f in features_needed if pd.isna(row_df[f].iloc[0])]
-            skip(describe_missing_features(missing_features))
-            continue
-
-        close_probability = pipeline.predict_proba(row_df[features_needed])[0, 1]
-        recommendations.append({
-            "ticker": ticker, "strike": strike, "short_call_expiry": record["Short Call Expiry"],
-            "mtm_pnl": feats["mtm_pnl"], "close_probability": float(close_probability),
-            "recommend_close": bool(close_probability > 0.5),
-            # Extra detail for the close alert (none of this feeds the model):
-            "long_call_expiry": record["Long Call Expiry"],
-            "date_opened": entry_date.isoformat(),
-            "days_held": feats["days_held"],
-            "entry_cashflow": entry_cashflow,
-            # What closing right now would pay out — same formula as func_import's Day_2_Cashflow
-            # and compute_snapshot_features' mtm calculation: sell the long (back) call, buy back
-            # the short (front) call. Expected profit (mtm_pnl) = entry_cashflow + this.
-            "exit_cashflow_today": round(100 * (back_today - front_today), 2),
-            "peak_mtm_pnl": feats["peak_mtm_pnl_so_far"],
-        })
-
-    return recommendations, skipped, state
-
-
-def main():
-    polygon_api_key = os.environ.get("POLYGON_API_KEY")
-    bot_token = os.environ.get("TELEGRAM_BOT_TOKEN")
-    chat_id = os.environ.get("TELEGRAM_CHAT_ID")
-    service_account_json = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON")
-    sheet_id = os.environ.get("GOOGLE_SHEET_ID")
-
-    missing = [name for name, val in [
-        ("POLYGON_API_KEY", polygon_api_key), ("TELEGRAM_BOT_TOKEN", bot_token),
-        ("TELEGRAM_CHAT_ID", chat_id), ("GOOGLE_SERVICE_ACCOUNT_JSON", service_account_json),
-        ("GOOGLE_SHEET_ID", sheet_id),
-    ] if not val]
-    if missing:
-        print(f"ERROR: missing environment variable(s): {', '.join(missing)}")
-        sys.exit(1)
-
-    search_root = os.getcwd()
-    pipeline, metadata = find_latest_model(search_root)
-    print(f"Using model: {metadata['timestamp']} (features: {metadata['features']})")
-
-    gc = gspread.service_account_from_dict(json.loads(service_account_json))
-    sheet = gc.open_by_key(sheet_id)
-
-    state = load_state()
-    recommendations, skipped, state = check_open_positions(polygon_api_key, sheet, pipeline, metadata, state)
-    save_state(state)
-
-    close_recs = [r for r in recommendations if r["recommend_close"]]
-
-    # Wrapped so a Telegram/formatting problem can't make the script exit non-zero — the
-    # position history was already saved above, and a failed run could skip the workflow's
-    # commit step and lose a day of history.
-    try:
-        # 1. The daily digest (every open position, one line each)
-        send_telegram_message(bot_token, chat_id, format_recommendations_message(recommendations, skipped))
-
-        # 2. A separate, detailed alert — only on days something should be closed. Sent last so
-        #    it's the message you see at the bottom of the chat.
-        close_alert = format_close_alert_message(close_recs, datetime.date.today())
-        if close_alert:
-            send_telegram_message(bot_token, chat_id, close_alert)
+        iv = implied_volatility.implied_volatility(option_price, S, K, T, r, option_type)
+        return {
+            "implied_volatility": iv,
+            "delta": analytical.delta(option_type, S, K, T, r, iv),
+            "gamma": analytical.gamma(option_type, S, K, T, r, iv),
+            "theta": analytical.theta(option_type, S, K, T, r, iv),
+            "vega": analytical.vega(option_type, S, K, T, r, iv),
+        }
     except Exception as e:
-        print(f"WARNING: Telegram message failed, but position history was saved. Error: {e}")
-
-    print(f"Checked {len(recommendations) + len(skipped)} open position(s): "
-          f"{len(recommendations)} assessed ({len(close_recs)} recommended for closing), "
-          f"{len(skipped)} could not be assessed.")
+        return {"implied_volatility": None, "delta": None, "gamma": None, "theta": None,
+                "vega": None, "error": str(e)}
 
 
-if __name__ == "__main__":
-    main()
+def find_option_contract(client, ticker, strike, expiration_date, contract_type="call"):
+    """Look up the Polygon options-ticker string for one specific contract — same method
+    func_import.py uses (client.list_options_contracts), so the returned ticker is guaranteed
+    to match what a live run would have traded. Returns None if not found.
+
+    IMPORTANT: Polygon's `expired` parameter on this endpoint is a strict filter, not an
+    "also include" switch — expired=False (the default) returns ONLY currently active,
+    not-yet-expired contracts, and expired=True returns ONLY already-expired ones. Each
+    excludes exactly what the other needs:
+      - build_hold_close_dataset.py looks up EXPIRED historical positions -> needs expired=True.
+      - run_daily_hold_close_check.py looks up CURRENTLY OPEN positions whose contracts
+        haven't expired yet -> needs expired=False.
+    An earlier version of this function hardcoded expired=True to fix the first case, which
+    silently broke the second (every live position lookup in the daily checker started
+    returning zero results). Since this one function serves both callers, it tries the
+    active-contract search first (the common case for a brand-new caller), then falls back to
+    searching expired contracts if that comes up empty — covering both without the caller
+    needing to know or declare which situation it's in.
+    """
+    def _search(expired):
+        return list(client.list_options_contracts(
+            underlying_ticker=ticker,
+            contract_type=contract_type,
+            strike_price=strike,
+            expiration_date=expiration_date.isoformat() if hasattr(expiration_date, "isoformat") else expiration_date,
+            expired=expired,
+            limit=5,
+        ))
+
+    results = _search(expired=False) or _search(expired=True)
+    return results[0].ticker if results else None
+
+
+def get_daily_close(client, options_ticker, on_date):
+    """Fetch the daily closing aggregate bar for one option contract on one date.
+    Returns None if there's no bar that day (contract not traded, market holiday, etc.)."""
+    date_str = on_date.isoformat() if hasattr(on_date, "isoformat") else str(on_date)
+    bars = client.get_aggs(ticker=options_ticker, multiplier=1, timespan="day",
+                            from_=date_str, to=date_str)
+    return bars[0].close if bars else None
+
+
+def get_stock_close(client, ticker, on_date):
+    """Fetch the underlying's daily closing price on one date. Returns None if no bar."""
+    date_str = on_date.isoformat() if hasattr(on_date, "isoformat") else str(on_date)
+    bars = client.get_aggs(ticker=ticker, multiplier=1, timespan="day", from_=date_str, to=date_str)
+    return bars[0].close if bars else None
+
+
+def compute_snapshot_features(
+        *,
+        snapshot_date,
+        entry_date,
+        front_expiry,
+        back_expiry,
+        strike,
+        entry_cashflow,
+        entry_underlying_price,
+        entry_front_iv,
+        entry_back_iv,
+        stock_price_today,
+        front_price_today,
+        back_price_today,
+        peak_mtm_pnl_so_far,
+        mtm_pnl_1d_ago=None,
+        mtm_pnl_3d_ago=None,
+):
+    """
+    Build one row of features for a single position on a single day, given prices already
+    fetched for that day. Kept as a pure function (no API calls inside) so it's trivially
+    testable and identical whether called from the historical builder or the daily checker.
+
+    Returns a dict with the features plus the computed mtm_pnl for this day (the caller is
+    responsible for tracking peak_mtm_pnl_so_far and the 1d/3d-ago values across days).
+    """
+    days_held = (snapshot_date - entry_date).days
+    days_to_front_expiry = (front_expiry - snapshot_date).days
+    days_to_back_expiry = (back_expiry - snapshot_date).days
+
+    front_T = max(days_to_front_expiry, 0) / 365
+    back_T = max(days_to_back_expiry, 0) / 365
+
+    front_greeks = (calculate_iv_and_greeks(stock_price_today, strike, front_T, front_price_today, "c")
+                    if front_T > 0 and front_price_today is not None else
+                    {"implied_volatility": None, "delta": None, "gamma": None, "theta": None, "vega": None})
+    back_greeks = (calculate_iv_and_greeks(stock_price_today, strike, back_T, back_price_today, "c")
+                   if back_T > 0 and back_price_today is not None else
+                   {"implied_volatility": None, "delta": None, "gamma": None, "theta": None, "vega": None})
+
+    # mark-to-market: what you'd net TODAY if you closed the position right now
+    # (matches func_import's Day_2_Cashflow formula, generalized to any day, not just exit)
+    if front_price_today is not None and back_price_today is not None:
+        exit_cashflow_today = 100 * (back_price_today - front_price_today)
+        mtm_pnl_today = round(entry_cashflow + exit_cashflow_today, 2)
+    else:
+        mtm_pnl_today = None
+
+    underlying_move_pct = (
+        100 * (stock_price_today / entry_underlying_price - 1)
+        if stock_price_today is not None and entry_underlying_price else None
+    )
+
+    front_iv_change = (
+        front_greeks["implied_volatility"] - entry_front_iv
+        if front_greeks["implied_volatility"] is not None and entry_front_iv is not None else None
+    )
+    back_iv_change = (
+        back_greeks["implied_volatility"] - entry_back_iv
+        if back_greeks["implied_volatility"] is not None and entry_back_iv is not None else None
+    )
+
+    new_peak = max(peak_mtm_pnl_so_far, mtm_pnl_today) if mtm_pnl_today is not None else peak_mtm_pnl_so_far
+    drawdown_from_peak = (mtm_pnl_today - new_peak) if mtm_pnl_today is not None else None
+
+    # Default to 0 ("no known change") rather than None when there isn't enough history yet
+    # (a position's first 1-3 days). Using None here would otherwise mean the very start of
+    # every position's life has an incomplete feature row — in training that means those rows
+    # get silently dropped from EVERY position, biasing the model away from ever learning what
+    # early days look like; at inference it would mean a brand-new position can't get a
+    # recommendation at all until it's 3 days old.
+    mtm_pnl_chg_1d = (mtm_pnl_today - mtm_pnl_1d_ago) if (mtm_pnl_today is not None and mtm_pnl_1d_ago is not None) else 0.0
+    mtm_pnl_chg_3d = (mtm_pnl_today - mtm_pnl_3d_ago) if (mtm_pnl_today is not None and mtm_pnl_3d_ago is not None) else 0.0
+
+    return {
+        "snapshot_date": snapshot_date,
+        "days_held": days_held,
+        "days_to_front_expiry": days_to_front_expiry,
+        "days_to_back_expiry": days_to_back_expiry,
+        "mtm_pnl": mtm_pnl_today,
+        "mtm_pnl_pct_of_debit": (100 * mtm_pnl_today / abs(entry_cashflow)) if (mtm_pnl_today is not None and entry_cashflow) else None,
+        "peak_mtm_pnl_so_far": new_peak,
+        "drawdown_from_peak": drawdown_from_peak,
+        "mtm_pnl_chg_1d": mtm_pnl_chg_1d,
+        "mtm_pnl_chg_3d": mtm_pnl_chg_3d,
+        "underlying_move_pct": underlying_move_pct,
+        "front_iv": front_greeks["implied_volatility"],
+        "back_iv": back_greeks["implied_volatility"],
+        "front_iv_change": front_iv_change,
+        "back_iv_change": back_iv_change,
+        "front_theta": front_greeks["theta"],
+        "back_theta": back_greeks["theta"],
+    }
+
+
+# The feature columns actually fed to the model (everything else in compute_snapshot_features'
+# output is identity/bookkeeping, not a model input). Kept as one list so the dataset builder,
+# trainer, and daily checker can never disagree about what the model expects.
+MODEL_FEATURES = [
+    "days_held", "days_to_front_expiry", "days_to_back_expiry",
+    "mtm_pnl_pct_of_debit", "drawdown_from_peak", "mtm_pnl_chg_1d", "mtm_pnl_chg_3d",
+    "underlying_move_pct", "front_iv", "back_iv", "front_iv_change", "back_iv_change",
+    "front_theta", "back_theta",
+]
