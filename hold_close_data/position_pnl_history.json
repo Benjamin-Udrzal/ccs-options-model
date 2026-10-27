@@ -116,6 +116,10 @@
       {
         "date": "2026-10-26",
         "mtm_pnl": -2.0
+      },
+      {
+        "date": "2026-10-27",
+        "mtm_pnl": -3.0
       }
     ]
   },
@@ -137,6 +141,10 @@
       {
         "date": "2026-10-26",
         "mtm_pnl": 73.0
+      },
+      {
+        "date": "2026-10-27",
+        "mtm_pnl": -48.0
       }
     ]
   },
@@ -166,6 +174,10 @@
       {
         "date": "2026-10-26",
         "mtm_pnl": -47.0
+      },
+      {
+        "date": "2026-10-27",
+        "mtm_pnl": -38.0
       }
     ]
   },
@@ -195,6 +207,10 @@
       {
         "date": "2026-10-26",
         "mtm_pnl": -22.0
+      },
+      {
+        "date": "2026-10-27",
+        "mtm_pnl": -34.0
       }
     ]
   },
@@ -260,6 +276,62 @@
       {
         "date": "2026-10-26",
         "mtm_pnl": 9.0
+      },
+      {
+        "date": "2026-10-27",
+        "mtm_pnl": 6.0
+      }
+    ]
+  },
+  "QQQ|2026-10-26|714.0": {
+    "entry_underlying_price": 712.2,
+    "entry_front_iv": 0.23786966592532657,
+    "entry_back_iv": 0.22799096136499977,
+    "front_ticker": "O:QQQ261113C00714000",
+    "back_ticker": "O:QQQ261204C00714000",
+    "history": [
+      {
+        "date": "2026-10-27",
+        "mtm_pnl": -217.8
+      }
+    ]
+  },
+  "GLD|2026-10-26|369.0": {
+    "entry_underlying_price": 367.82,
+    "entry_front_iv": 0.21458383492966118,
+    "entry_back_iv": 0.20320330035140619,
+    "front_ticker": "O:GLD261113C00369000",
+    "back_ticker": "O:GLD261204C00369000",
+    "history": [
+      {
+        "date": "2026-10-27",
+        "mtm_pnl": 18.6
+      }
+    ]
+  },
+  "XLP|2026-10-26|88.0": {
+    "entry_underlying_price": 87.96,
+    "entry_front_iv": 0.16633473141153896,
+    "entry_back_iv": 0.1635347028431488,
+    "front_ticker": "O:XLP261113C00088000",
+    "back_ticker": "O:XLP261204C00088000",
+    "history": [
+      {
+        "date": "2026-10-27",
+        "mtm_pnl": 5.1
+      }
+    ]
+  },
+  "SLV|2026-10-26|49.0": {
+    "entry_underlying_price": 48.66,
+    "entry_front_iv": 0.41097737935901435,
+    "entry_back_iv": 0.36803729741642666,
+    "front_ticker": "O:SLV261113C00049000",
+    "back_ticker": "O:SLV261204C00049000",
+    "history": [
+      {
+        "date": "2026-10-27",
+        "mtm_pnl": 16.1
       }
     ]
   }

@@ -1,34 +1,13 @@
 {
-  "date": "2026-10-26",
-  "sent_at": 1793039241.483539,
+  "date": "2026-10-27",
+  "sent_at": 1793126828.475218,
   "positions": [
     {
-      "ticker": "QQQ",
-      "strike": 714.0,
-      "short_call_expiry": "2026-11-13",
+      "ticker": "XLV",
+      "strike": 179.0,
+      "short_call_expiry": "2026-11-20",
       "long_call_expiry": "2026-12-04",
-      "day_1_cashflow": -693.8
-    },
-    {
-      "ticker": "GLD",
-      "strike": 369.0,
-      "short_call_expiry": "2026-11-13",
-      "long_call_expiry": "2026-12-04",
-      "day_1_cashflow": -286.4
-    },
-    {
-      "ticker": "XLP",
-      "strike": 88.0,
-      "short_call_expiry": "2026-11-13",
-      "long_call_expiry": "2026-12-04",
-      "day_1_cashflow": -61.9
-    },
-    {
-      "ticker": "SLV",
-      "strike": 49.0,
-      "short_call_expiry": "2026-11-13",
-      "long_call_expiry": "2026-12-04",
-      "day_1_cashflow": -61.9
+      "day_1_cashflow": -54.2
     }
   ]
 }
