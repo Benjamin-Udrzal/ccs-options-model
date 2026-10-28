@@ -1,429 +1,303 @@
 """
-Entry point for the "Check Telegram Replies" GitHub Actions workflow.
+Entry point for the "Daily Test + Alert" GitHub Actions workflow.
 
-Polls Telegram for new messages (GitHub Actions can't run a persistent webhook server, so
-short-interval polling is the practical alternative). Handles two kinds of replies:
-
-    opened <number>[,<number>...]
-        e.g. "opened 2" or "opened 1,2,3" (commas and/or spaces both work) — matches the
-        position numbers from the day's Telegram alert (see run_daily_test_and_alert.py).
-        Looks each one up in alerts/latest_signal.json and appends it as a new row to the
-        "Open Positions" tab of your Google Sheet.
-
-    closed <strike> <ticker> <profit>
-        e.g. "closed 56 SLV 23.6" — finds the matching OPEN row(s) in the sheet by ticker and
-        strike, and marks it closed: Status -> "Closed", Exit Date -> today, Profit -> the
-        given profit, Exit Cashflow -> profit - entry cashflow.
-        If more than one open position matches (same ticker and strike, different expiry),
-        a Telegram message is sent asking which expiration date is meant, listing the
-        available options. Your next reply naming that expiry is picked up on the NEXT run
-        of this workflow (state persists across runs in alerts/telegram_state.json) and
-        completes the close on the correct row.
-        If no open position matches at all, you get a message explaining that.
-
-State (which Telegram updates have been processed, which position numbers have already been
-logged today, and any pending close-disambiguation) is kept in alerts/telegram_state.json and
-committed back to the repo by the workflow, the same way the other scripts persist state.
+Runs on weekdays at 17:15 Europe/London:
+  1. Runs the daily "dtest" import (func_import) — same as run_daily_import.py.
+  2. Tests that fresh dataset against the LATEST committed trained model (test_model()).
+  3. Sends a Telegram message listing every suggested trade (Open_Trade == 1), with the
+     details needed to open it: ticker, strike, short/long call expiry, and the PREDICTED Day 1
+     cashflow (from live bid/ask quotes when available — see func_import's Entry_Price_Source —
+     plus a mid-price estimate for comparison).
+  4. Saves a numbered reference of today's positions to alerts/latest_signal.json, so that
+     check_telegram_replies.py can resolve "opened 2 -100" back to the actual position details
+     and record the predicted cashflow next to the ACTUAL one you report.
 
 Requires these GitHub Actions secrets:
-  TELEGRAM_BOT_TOKEN            - your bot's token from @BotFather
-  TELEGRAM_CHAT_ID              - your chat ID (only messages from this chat are processed)
-  GOOGLE_SERVICE_ACCOUNT_JSON   - full contents of a Google Cloud service account JSON key
-  GOOGLE_SHEET_ID               - the target spreadsheet's ID (from its URL)
+  POLYGON_API_KEY      - as used by the daily import
+  TELEGRAM_BOT_TOKEN   - your bot's token from @BotFather
+  TELEGRAM_CHAT_ID     - the chat ID to send alerts to
 """
 
 import os
-import re
 import sys
 import json
+import math
 import datetime
+from zoneinfo import ZoneInfo
 import requests
-import gspread
+
+from func_import import func_import
+from func_test_model import test_model
 
 SIGNAL_REFERENCE_PATH = os.path.join("alerts", "latest_signal.json")
-STATE_PATH = os.path.join("alerts", "telegram_state.json")
-SHEET_TAB_NAME = "Open Positions"
-SHEET_HEADERS = [
-    "Date Opened", "Ticker", "Strike", "Short Call Expiry", "Long Call Expiry",
-    "Entry Cashflow", "Status", "Exit Date", "Exit Cashflow", "Profit",
-]
-
-# Accepts one or more position numbers after "opened", separated by commas and/or whitespace:
-# "opened 2", "opened 1,2,3", "opened 1, 2, 3", and "opened 1 2 3" all match.
-OPENED_PATTERN = re.compile(r"^\s*opened\s+(\d+(?:\s*[,\s]\s*\d+)*)\s*$", re.IGNORECASE)
-CLOSED_PATTERN = re.compile(r"^\s*closed\s+(-?[\d.]+)\s+([A-Za-z.]+)\s+(-?[\d.]+)\s*$", re.IGNORECASE)
+ALERT_LOG_PATH = os.path.join("alerts", "alert_log.json")
 
 
-# ---------------------------------------------------------------------------
-# State / signal persistence
-# ---------------------------------------------------------------------------
+def today_uk_date():
+    """The current calendar date in Europe/London, used as the per-day key for both the
+    signal reference and the alert dedup log.
 
-def load_state():
-    if os.path.exists(STATE_PATH):
-        with open(STATE_PATH) as f:
-            state = json.load(f)
-    else:
-        state = {}
-    state.setdefault("last_update_id", 0)
-    state.setdefault("logged_positions", {})
-    state.setdefault("pending_close", None)
-    return state
-
-
-def save_state(state):
-    os.makedirs(os.path.dirname(STATE_PATH), exist_ok=True)
-    with open(STATE_PATH, "w") as f:
-        json.dump(state, f, indent=2)
+    NOTE: an earlier version of this script derived "today's date" from
+    os.path.dirname(test_result["test_data_path"]) — but that path's immediate parent folder
+    is func_import's constant "<run_reason> Import Outputs" directory name, not a date at all.
+    That meant every day's Telegram header read "CCS Daily Signal — dtest Import Outputs"
+    instead of an actual date, and — more seriously — once per-day alert dedup was added, it
+    would have kept matching that same constant string forever, silently blocking EVERY future
+    alert after the first one ever sent. Using the real Europe/London calendar date here avoids
+    both problems and doesn't depend on func_import's folder-naming scheme at all."""
+    return datetime.datetime.now(ZoneInfo("Europe/London")).date().isoformat()
 
 
-def load_signal_reference():
-    if not os.path.exists(SIGNAL_REFERENCE_PATH):
-        return None
-    with open(SIGNAL_REFERENCE_PATH) as f:
-        return json.load(f)
-
-
-# ---------------------------------------------------------------------------
-# Telegram
-# ---------------------------------------------------------------------------
-
-def get_telegram_updates(bot_token, offset):
-    url = f"https://api.telegram.org/bot{bot_token}/getUpdates"
-    resp = requests.get(url, params={"offset": offset, "timeout": 10})
-    resp.raise_for_status()
-    data = resp.json()
-    if not data.get("ok"):
-        raise RuntimeError(f"Telegram getUpdates failed: {data}")
-    return data["result"]
-
-
-def send_telegram_message(bot_token, chat_id, text):
-    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-    resp = requests.post(url, data={"chat_id": chat_id, "text": text, "parse_mode": "HTML"})
-    if resp.status_code != 200:
-        print(f"WARNING: Telegram send failed ({resp.status_code}): {resp.text}")
-
-
-# ---------------------------------------------------------------------------
-# Google Sheet helpers
-# ---------------------------------------------------------------------------
-
-def get_or_create_worksheet(sheet):
+def _to_float(value):
+    """float(value), or None if it's missing / NaN / not numeric (so JSON and messages never get 'nan')."""
     try:
-        ws = sheet.worksheet(SHEET_TAB_NAME)
-    except gspread.exceptions.WorksheetNotFound:
-        print(f"'{SHEET_TAB_NAME}' tab not found — creating it.")
-        ws = sheet.add_worksheet(title=SHEET_TAB_NAME, rows=1000, cols=len(SHEET_HEADERS))
-    return ws
-
-
-def ensure_worksheet_headers(worksheet):
-    """Make sure every column in SHEET_HEADERS exists in row 1, appending any that are
-    missing (e.g. 'Profit' on a sheet created before that column existed). Returns the
-    final header row, in whatever order it actually is in the sheet."""
-    header_row = worksheet.row_values(1)
-    changed = False
-    for col_name in SHEET_HEADERS:
-        if col_name not in header_row:
-            header_row.append(col_name)
-            changed = True
-    if changed:
-        worksheet.update("A1", [header_row])
-        print(f"Updated sheet headers: {header_row}")
-    return header_row
-
-
-def append_position_to_sheet(worksheet, header_row, position):
-    row = [""] * len(header_row)
-    values = {
-        "Date Opened": datetime.date.today().isoformat(),
-        "Ticker": position["ticker"],
-        "Strike": position["strike"] if position["strike"] is not None else "",
-        "Short Call Expiry": position["short_call_expiry"],
-        "Long Call Expiry": position["long_call_expiry"],
-        "Entry Cashflow": position["day_1_cashflow"] if position["day_1_cashflow"] is not None else "",
-        "Status": "Open",
-    }
-    for col_name, value in values.items():
-        row[header_row.index(col_name)] = value
-    worksheet.append_row(row)
-
-
-def find_open_positions(worksheet, header_row, ticker, strike):
-    """Return a list of (row_number, record_dict) for OPEN rows matching ticker + strike.
-    row_number is the actual 1-indexed sheet row, ready to pass to update_cell/update."""
-    records = worksheet.get_all_records(expected_headers=header_row)
-    matches = []
-    for i, rec in enumerate(records):
-        row_number = i + 2  # +1 for header row, +1 because sheet rows are 1-indexed
-        if str(rec.get("Status", "")).strip().lower() != "open":
-            continue
-        if str(rec.get("Ticker", "")).strip().upper() != ticker.strip().upper():
-            continue
-        try:
-            rec_strike = float(rec.get("Strike", ""))
-        except (TypeError, ValueError):
-            continue
-        if abs(rec_strike - strike) > 1e-6:
-            continue
-        matches.append((row_number, rec))
-    return matches
-
-
-def close_position_row(worksheet, header_row, row_number, record, profit):
-    entry_cashflow = record.get("Entry Cashflow", "")
-    try:
-        entry_cashflow_val = float(entry_cashflow)
+        result = float(value)
     except (TypeError, ValueError):
-        entry_cashflow_val = 0.0
-    exit_cashflow = round(profit - entry_cashflow_val, 2)
-
-    updates = {
-        "Status": "Closed",
-        "Exit Date": datetime.date.today().isoformat(),
-        "Exit Cashflow": exit_cashflow,
-        "Profit": profit,
-    }
-    for col_name, value in updates.items():
-        col_index = header_row.index(col_name) + 1  # gspread columns are 1-indexed
-        worksheet.update_cell(row_number, col_index, value)
-    return exit_cashflow
+        return None
+    return None if math.isnan(result) else result
 
 
-def format_disambiguation_message(ticker, strike, candidates):
-    lines = [
-        f"❓ Found {len(candidates)} open positions matching <b>{ticker}</b> strike ${strike:.2f}.",
-        "Reply with the exact Short Call Expiry to specify which one:\n",
-    ]
-    for row_number, rec in candidates:
+def fmt_cashflow(value):
+    """Signed dollar amount: -$35.00 / +$10.00 (a plain f"${-35:.2f}" would give "$-35.00")."""
+    if value is None:
+        return "N/A"
+    return f"{'-' if value < 0 else '+'}${abs(value):,.2f}"
+
+
+# Columns that func_import adds to its dtest output (the in-memory dataset it returns). They are
+# not model features, so the model-testing step may not carry them into its predictions table —
+# which is why they're joined back in from func_import's own result rather than read from there.
+ENTRY_DETAIL_COLUMNS = ["Entry_Price_Source", "Day_1_Cashflow_Mid"]
+
+
+def add_entry_detail(df_open, testing_dataset):
+    """Attach Entry_Price_Source / Day_1_Cashflow_Mid from func_import's dtest dataset to the rows
+    being suggested. Joins on Ticker only: a dtest dataset holds one row per ticker (today's entry),
+    so that key is unique and avoids date/expiry type mismatches between the two tables."""
+    if testing_dataset is None or "Ticker" not in df_open.columns or "Ticker" not in testing_dataset.columns:
+        return df_open
+    wanted = [c for c in ENTRY_DETAIL_COLUMNS if c in testing_dataset.columns and c not in df_open.columns]
+    if not wanted:
+        return df_open
+    detail = testing_dataset[["Ticker"] + wanted].drop_duplicates(subset="Ticker", keep="last")
+    merged = df_open.merge(detail, how="left", on="Ticker")
+    return merged if len(merged) == len(df_open) else df_open
+
+
+def build_positions_list(df_open):
+    """Turn the Open_Trade==1 rows into a plain list of dicts, numbered the same way the
+    Telegram message numbers them (position 1, 2, 3...) — this numbering is the contract
+    between the alert message and check_telegram_replies.py."""
+    missing_cols = [c for c in ("Call_1_expiration_date", "Call_2_expiration_date", "Call_strike_price", "Day_1_Cashflow")
+                     if c not in df_open.columns]
+    if missing_cols:
+        print(f"WARNING: predictions are missing expected column(s) {missing_cols} — "
+              f"showing 'N/A' for those fields. This usually means the test data was generated "
+              f"by an older version of func_import.py that doesn't save these columns yet.")
+
+    positions = []
+    for _, row in df_open.iterrows():
+        source = row.get("Entry_Price_Source", None)
+        positions.append({
+            "ticker": str(row.get("Ticker", "Unknown")),
+            "strike": _to_float(row.get("Call_strike_price", None)),
+            "short_call_expiry": str(row.get("Call_1_expiration_date", "N/A")),
+            "long_call_expiry": str(row.get("Call_2_expiration_date", "N/A")),
+            # PREDICTED Day 1 cashflow. check_telegram_replies.py stores this in the sheet next to the
+            # actual cashflow you report back, so the two can be compared.
+            "day_1_cashflow": _to_float(row.get("Day_1_Cashflow", None)),
+            # How that figure was priced: "quote" = live bid/ask (short at bid, long at ask);
+            # anything else = last trade +/- the flat spread assumption in func_import.
+            "entry_price_source": source if isinstance(source, str) else "unknown",
+            "day_1_cashflow_mid": _to_float(row.get("Day_1_Cashflow_Mid", None)),
+        })
+    return positions
+
+
+def format_trade_message(positions, signal_date):
+    """Build an HTML-formatted Telegram message from a positions list (see build_positions_list)."""
+    header = f"📊 <b>CCS Daily Signal — {signal_date}</b>"
+
+    if not positions:
+        return f"{header}\n\nNo trades suggested today."
+
+    lines = [header, f"\n<b>{len(positions)} position(s) suggested to open:</b>\n"]
+    for i, pos in enumerate(positions, start=1):
+        strike_str = f"${pos['strike']:.2f}" if pos["strike"] is not None else "N/A"
+        cashflow_str = fmt_cashflow(pos["day_1_cashflow"])
+        if pos.get("entry_price_source") == "quote":
+            basis = "live bid/ask: short sold at bid, long bought at ask"
+        else:
+            basis = "estimated from last trade — no live quote"
+        mid = pos.get("day_1_cashflow_mid")
+        mid_line = f"   Mid-price estimate: {fmt_cashflow(mid)}\n" if mid is not None else ""
         lines.append(
-            f"• {rec.get('Short Call Expiry', 'N/A')} "
-            f"(opened {rec.get('Date Opened', 'N/A')}, entry cashflow {rec.get('Entry Cashflow', 'N/A')})"
+            f"<b>{i}. {pos['ticker']}</b>\n"
+            f"   Strike: {strike_str}\n"
+            f"   Short Call Expiry: {pos['short_call_expiry']}\n"
+            f"   Long Call Expiry: {pos['long_call_expiry']}\n"
+            f"   Predicted Day 1 Cashflow: {cashflow_str} ({basis})\n"
+            f"{mid_line}"
         )
+    lines.append(
+        "\n💡 Once you've opened them, reply with the ACTUAL Day 1 cashflow you got for each, e.g. "
+        "<b>opened 1 -35, opened 2 -100</b> (negative = you paid, i.e. a debit). "
+        "That logs each position to your tracker with the predicted and actual cashflow side by side."
+    )
     return "\n".join(lines)
 
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
+def save_signal_reference(positions, signal_date):
+    """Save today's numbered positions so check_telegram_replies.py can look up what
+    'opened N' refers to. Overwrites the previous day's file — replies should be sent the
+    same day the alert arrives, before the next day's run overwrites this. Includes a Unix
+    timestamp so the reply-checker can ignore any message sent BEFORE this signal existed
+    (e.g. a stale "opened 2" left over from before today's alert went out).
+
+    If a signal for THIS SAME signal_date already exists (e.g. a manual run happens on a day
+    a scheduled alert already went out), it is left untouched rather than overwritten.
+    Rewriting it would bump "sent_at" forward, which could make the reply-checker wrongly
+    discard an "opened N" reply that the user already sent in response to the earlier alert,
+    just because it now looks "older than the signal"."""
+    if os.path.exists(SIGNAL_REFERENCE_PATH):
+        try:
+            with open(SIGNAL_REFERENCE_PATH) as f:
+                existing = json.load(f)
+            if existing.get("date") == signal_date:
+                print(f"Signal reference for {signal_date} already exists — leaving it as-is "
+                      f"(not resetting sent_at, so any reply already sent today still resolves correctly).")
+                return
+        except (json.JSONDecodeError, OSError):
+            pass  # corrupt/unreadable — fall through and just (re)write a fresh one
+
+    os.makedirs(os.path.dirname(SIGNAL_REFERENCE_PATH), exist_ok=True)
+    with open(SIGNAL_REFERENCE_PATH, "w") as f:
+        json.dump({
+            "date": signal_date,
+            "sent_at": datetime.datetime.now(datetime.timezone.utc).timestamp(),
+            "positions": positions,
+        }, f, indent=2)
+    print(f"Signal reference saved to: {SIGNAL_REFERENCE_PATH}")
+
+
+def load_alert_log():
+    if os.path.exists(ALERT_LOG_PATH):
+        try:
+            with open(ALERT_LOG_PATH) as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError):
+            pass
+    return {"sent_dates": []}
+
+
+def save_alert_log(log):
+    os.makedirs(os.path.dirname(ALERT_LOG_PATH), exist_ok=True)
+    # Keep the log small — only recent dates are ever relevant for same-day-repeat detection.
+    log["sent_dates"] = log.get("sent_dates", [])[-30:]
+    with open(ALERT_LOG_PATH, "w") as f:
+        json.dump(log, f, indent=2)
+
+
+def send_telegram_message(text, bot_token, chat_id):
+    """Send `text` via the Telegram Bot API, splitting into chunks if over Telegram's 4096-char cap."""
+    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+    max_len = 3500
+    chunks = [text[i:i + max_len] for i in range(0, len(text), max_len)] or [text]
+    for chunk in chunks:
+        resp = requests.post(url, data={"chat_id": chat_id, "text": chunk, "parse_mode": "HTML"})
+        if resp.status_code != 200:
+            print(f"WARNING: Telegram send failed ({resp.status_code}): {resp.text}")
+
 
 def main():
+    api_key = os.environ.get("POLYGON_API_KEY")
     bot_token = os.environ.get("TELEGRAM_BOT_TOKEN")
     chat_id = os.environ.get("TELEGRAM_CHAT_ID")
-    service_account_json = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON")
-    sheet_id = os.environ.get("GOOGLE_SHEET_ID")
 
+    if not api_key:
+        print("ERROR: POLYGON_API_KEY environment variable is not set.")
+        sys.exit(1)
     if not bot_token or not chat_id:
         print("ERROR: TELEGRAM_BOT_TOKEN and/or TELEGRAM_CHAT_ID environment variable is not set.")
         sys.exit(1)
-    if not service_account_json or not sheet_id:
-        print("ERROR: GOOGLE_SERVICE_ACCOUNT_JSON and/or GOOGLE_SHEET_ID environment variable is not set.")
-        sys.exit(1)
 
-    state = load_state()
-    updates = get_telegram_updates(bot_token, offset=state["last_update_id"] + 1)
+    # --- 0. Decide up front whether this run should do anything at all ---
+    #
+    # GitHub Actions' `schedule` trigger is best-effort and can be delayed by hours — enough
+    # that this workflow's two DST-safe cron slots (see the workflow YAML) can both end up
+    # firing on the same day, in either order, at unpredictable times. Rather than trying to
+    # guess which slot is "correct" by checking the clock (the old approach: skip unless the
+    # current London hour is 17 — which wrongly skips a legitimately first, just-late run), the
+    # rule here is simpler and matches what's actually wanted: whichever scheduled run fires
+    # FIRST each day does the real work and sends the alert; any other scheduled run that fires
+    # later the same day is a repeat, and skips immediately, before spending any time or
+    # Polygon API quota on the import/test.
+    #
+    # A manual run (workflow_dispatch — clicking "Run workflow", or re-running a job) is always
+    # a deliberate request, so it always runs fully and always sends, regardless of whether a
+    # scheduled alert already went out today. It also never writes to alert_log.json, so it can
+    # neither block nor be blocked by the schedule's own once-a-day tracking — the two are
+    # tracked completely independently.
+    is_scheduled_run = os.environ.get("GITHUB_EVENT_NAME") == "schedule"
+    signal_date = today_uk_date()
 
-    if not updates:
-        print("No new Telegram messages.")
-        return
+    if is_scheduled_run:
+        alert_log = load_alert_log()
+        if signal_date in alert_log.get("sent_dates", []):
+            print(f"Alert for {signal_date} was already sent by an earlier scheduled run today — "
+                  f"this run is a repeat/delayed trigger (see DST cron notes in the workflow). "
+                  f"Skipping the import/test/alert pipeline entirely — nothing left to do.")
+            return
 
-    signal = load_signal_reference()
+    # --- 1. Run the daily import ---
+    output_dir = os.path.join(os.getcwd(), "dtest_outputs")
+    import_result = func_import(
+        polygon_api_key=api_key,
+        run_reason="dtest",
+        default_settings=True,
+        output_dir=output_dir,
+    )
+    print(f"Import saved to: {import_result['output_dir']}")
 
-    # Classify each new message into one of: an "opened N" request, a "closed T S P" request,
-    # or (if a disambiguation is currently pending) a plain reply naming an expiry date.
-    # Everything else is ignored. Every update still advances last_update_id, so nothing gets
-    # reprocessed on future runs regardless of whether we acted on it.
-    opened_requests = []
-    closed_requests = []
-    disambiguation_replies = []
-    unrecognized = []  # (chat_id-safe) raw text of messages that matched nothing, for a reply
+    # --- 2. Test the fresh data against the latest trained model ---
+    # test_data is left as None deliberately: since this dtest folder was JUST created above,
+    # it's guaranteed to be the latest one — no need to point at it explicitly.
+    test_result = test_model(search_root=os.getcwd())
+    print(f"Model used: {test_result['model_folder']}")
+    print(f"Test data used: {test_result['test_data_path']}")
+    print(f"Predictions saved to: {test_result['output_path']}")
 
-    for update in updates:
-        state["last_update_id"] = max(state["last_update_id"], update["update_id"])
-        message = update.get("message")
-        if not message:
-            continue
-        if str(message.get("chat", {}).get("id")) != str(chat_id):
-            print(f"Ignoring message from unauthorized chat {message.get('chat', {}).get('id')}.")
-            continue
+    # --- 3. Send the Telegram alert, and save today's numbered signal for later replies ---
+    # Wrapped in try/except deliberately: the import and predictions above are the valuable,
+    # expensive part of this run. A bug in message formatting or a Telegram API hiccup should
+    # never cause the whole script to exit non-zero — that would skip the "commit and push"
+    # step in the workflow and throw away a perfectly good day's data. Worst case here, you
+    # miss one alert but still get the commit; check the Action log if that happens.
+    #
+    # Note: whether to send at all was already decided in step 0, before the expensive import
+    # and test ran — by this point we always want to send (it's either a manual run, or the
+    # first scheduled run of the day).
+    try:
+        df = test_result["predictions"]
+        df_open = df[df["Open_Trade"] == 1].copy()
+        df_open = add_entry_detail(df_open, import_result.get("testing_dataset"))
 
-        text = message.get("text", "")
-        message_sent_at = message.get("date")
+        positions = build_positions_list(df_open)
+        save_signal_reference(positions, signal_date)
 
-        opened_match = OPENED_PATTERN.match(text)
-        closed_match = CLOSED_PATTERN.match(text)
+        message = format_trade_message(positions, signal_date)
+        send_telegram_message(message, bot_token, chat_id)
 
-        if opened_match:
-            if signal is not None and message_sent_at is not None and message_sent_at < signal["sent_at"]:
-                print(f"Ignoring \"{text}\" — sent before today's signal, refers to a previous day's positions.")
-                continue
-            # group(1) is everything after "opened ", e.g. "1,2,3" or "1, 2 3" — split on any
-            # mix of commas/whitespace and de-duplicate while preserving order.
-            numbers = [int(n) for n in re.split(r"[,\s]+", opened_match.group(1).strip()) if n]
-            for n in numbers:
-                if n not in opened_requests:
-                    opened_requests.append(n)
-        elif closed_match:
-            closed_requests.append({
-                "strike": float(closed_match.group(1)),
-                "ticker": closed_match.group(2),
-                "profit": float(closed_match.group(3)),
-            })
-        elif state.get("pending_close"):
-            disambiguation_replies.append(text.strip())
-        else:
-            unrecognized.append(text)
+        if is_scheduled_run:
+            alert_log = load_alert_log()
+            alert_log.setdefault("sent_dates", []).append(signal_date)
+            save_alert_log(alert_log)
 
-    for text in unrecognized:
-        send_telegram_message(
-            bot_token, chat_id,
-            f"⚠️ Didn't understand: \"{text}\". Expected formats are \"opened &lt;number&gt;\" "
-            f"(or \"opened 1,2,3\" for several), or \"closed &lt;strike&gt; &lt;ticker&gt; &lt;profit&gt;\"."
-        )
-        print(f"Unrecognized message, replied with format help: \"{text}\"")
-
-    if not opened_requests and not closed_requests and not disambiguation_replies:
-        print(f"No actionable messages among {len(updates)} update(s).")
-        save_state(state)
-        return
-
-    # --- Handle "opened N" ---
-    if opened_requests and signal is None:
-        for n in opened_requests:
-            send_telegram_message(bot_token, chat_id,
-                                   f"⚠️ Got \"opened {n}\" but no signal has been sent yet today — nothing to log.")
-        opened_requests = []
-
-    # Only connect to Google Sheets if there's actually something to do there.
-    if opened_requests or closed_requests or disambiguation_replies:
-        gc = gspread.service_account_from_dict(json.loads(service_account_json))
-        sheet = gc.open_by_key(sheet_id)
-        worksheet = get_or_create_worksheet(sheet)
-        header_row = ensure_worksheet_headers(worksheet)
-    else:
-        worksheet = header_row = None
-
-    if opened_requests:
-        signal_date = signal["date"]
-        logged_today = set(state["logged_positions"].get(signal_date, []))
-
-        for n in opened_requests:
-            idx = n - 1  # positions are 1-indexed in the message, 0-indexed in the list
-            if idx < 0 or idx >= len(signal["positions"]):
-                send_telegram_message(bot_token, chat_id,
-                                       f"⚠️ \"opened {n}\" doesn't match any position in today's signal "
-                                       f"(there were {len(signal['positions'])}). Nothing logged.")
-                continue
-            if n in logged_today:
-                send_telegram_message(bot_token, chat_id, f"ℹ️ Position {n} was already logged today — skipping.")
-                continue
-
-            position = signal["positions"][idx]
-            append_position_to_sheet(worksheet, header_row, position)
-            logged_today.add(n)
-            send_telegram_message(
-                bot_token, chat_id,
-                f"✅ Logged to tracker: <b>{position['ticker']}</b> "
-                f"(strike ${position['strike']:.2f}, short {position['short_call_expiry']}, "
-                f"long {position['long_call_expiry']})."
-            )
-            print(f"Logged position {n} ({position['ticker']}) to the sheet.")
-
-        state["logged_positions"][signal_date] = sorted(logged_today)
-
-    # --- Handle "closed <strike> <ticker> <profit>" ---
-    for req in closed_requests:
-        matches = find_open_positions(worksheet, header_row, req["ticker"], req["strike"])
-
-        if not matches:
-            send_telegram_message(
-                bot_token, chat_id,
-                f"⚠️ No open position found for <b>{req['ticker']}</b> at strike ${req['strike']:.2f}. "
-                f"Nothing closed."
-            )
-            continue
-
-        if len(matches) == 1:
-            row_number, record = matches[0]
-            exit_cashflow = close_position_row(worksheet, header_row, row_number, record, req["profit"])
-            send_telegram_message(
-                bot_token, chat_id,
-                f"✅ Closed <b>{req['ticker']}</b> strike ${req['strike']:.2f} "
-                f"(expiry {record.get('Short Call Expiry', 'N/A')}). "
-                f"Profit: ${req['profit']:.2f}, Exit Cashflow: ${exit_cashflow:.2f}."
-            )
-            print(f"Closed {req['ticker']} strike {req['strike']} (row {row_number}).")
-        else:
-            # Ambiguous — ask which expiry, and remember this request until the reply arrives
-            # (possibly on a LATER run of this workflow).
-            state["pending_close"] = {
-                "ticker": req["ticker"],
-                "strike": req["strike"],
-                "profit": req["profit"],
-                "candidates": [
-                    {"row": row_number, **record} for row_number, record in matches
-                ],
-            }
-            send_telegram_message(bot_token, chat_id, format_disambiguation_message(req["ticker"], req["strike"], matches))
-            print(f"Ambiguous close for {req['ticker']} strike {req['strike']} — asked for expiry.")
-
-    # --- Handle a reply resolving a pending disambiguation ---
-    pending = state.get("pending_close")
-    for reply_text in disambiguation_replies:
-        if not pending:
-            break  # already resolved by an earlier reply in this same batch
-
-        reply_norm = reply_text.strip().lower()
-        matched_candidates = [
-            c for c in pending["candidates"]
-            if reply_norm == str(c.get("Short Call Expiry", "")).strip().lower()
-            or reply_norm in str(c.get("Short Call Expiry", "")).strip().lower()
-        ]
-
-        if not matched_candidates:
-            send_telegram_message(
-                bot_token, chat_id,
-                f"⚠️ \"{reply_text}\" didn't match any of the expiry dates for the pending close on "
-                f"<b>{pending['ticker']}</b> strike ${pending['strike']:.2f}. "
-                f"Please reply with one of the listed dates exactly."
-            )
-            continue
-
-        for candidate in matched_candidates:
-            row_number = candidate["row"]
-            close_position_row(worksheet, header_row, row_number, candidate, pending["profit"])
-            print(f"Resolved ambiguous close for {pending['ticker']} strike {pending['strike']} (row {row_number}).")
-
-        if len(matched_candidates) == 1:
-            candidate = matched_candidates[0]
-            # Re-derive exit cashflow just for the message (close_position_row already wrote it).
-            try:
-                entry_cf = float(candidate.get("Entry Cashflow", 0) or 0)
-            except (TypeError, ValueError):
-                entry_cf = 0.0
-            exit_cashflow = round(pending["profit"] - entry_cf, 2)
-            send_telegram_message(
-                bot_token, chat_id,
-                f"✅ Closed <b>{pending['ticker']}</b> strike ${pending['strike']:.2f} "
-                f"(expiry {candidate.get('Short Call Expiry', 'N/A')}). "
-                f"Profit: ${pending['profit']:.2f}, Exit Cashflow: ${exit_cashflow:.2f}."
-            )
-        else:
-            # Genuine duplicates: same ticker, strike, AND expiry — there's no way to tell them
-            # apart from the reply alone, so close all of them rather than guessing which one
-            # was meant, but flag it clearly since one of these closures may be wrong.
-            send_telegram_message(
-                bot_token, chat_id,
-                f"⚠️ {len(matched_candidates)} open positions matched <b>{pending['ticker']}</b> "
-                f"strike ${pending['strike']:.2f} at expiry {reply_text.strip()} — all {len(matched_candidates)} "
-                f"have been closed with profit ${pending['profit']:.2f}. Please manually review the tracker "
-                f"to confirm this is correct."
-            )
-
-        pending = None
-        state["pending_close"] = None
-
-    save_state(state)
+        print(f"Telegram alert sent ({len(positions)} trade(s) to open) "
+              f"[trigger: {os.environ.get('GITHUB_EVENT_NAME', 'unknown')}].")
+    except Exception as e:
+        print(f"WARNING: Telegram alert failed, but import/test data was saved successfully. "
+              f"Error: {e}")
 
 
 if __name__ == "__main__":
