@@ -130,10 +130,10 @@ def func_import(
             test_split = test_split_default
         else:
             if not (50 <= sample_size <= 2000):
-                ValueError(f"When training the sample size must be between 50 and 2000")
+                raise ValueError(f"When training the sample size must be between 50 and 2000")
             ticker_list = [item.strip().upper() for item in ticker_list_str.split(",")]
             if not (0 <= test_split <= 0.99):
-                ValueError(f"When training the test split must be between 0 and 0.99")
+                raise ValueError(f"When training the test split must be between 0 and 0.99")
 
 
     elif run_reason in ("test", "dtest"):
@@ -143,7 +143,7 @@ def func_import(
             test_split = 1
         else:
             if not (25 <= sample_size <= 200):
-                ValueError(f"When testing the sample size must be between 25 and 200")
+                raise ValueError(f"When testing the sample size must be between 25 and 200")
             ticker_list = [item.strip().upper() for item in ticker_list_str.split(",")]
             test_split = 1
     else:
@@ -180,6 +180,51 @@ def func_import(
         """
         uk_dt = datetime.combine(date_, decision_time_local, tzinfo=decision_tz)
         return uk_dt.astimezone(ny_tz)
+
+
+    def get_decision_time_option_price(opt_ticker, trade_date):
+        """
+        Close of the latest 5-minute bar for `opt_ticker` at/before the decision time (5pm UK,
+        converted to New York time) on `trade_date`, or None if there's no such bar (no trade
+        printed yet that day, API error). Same rule func_left_join_on_decision_price applies to the
+        underlying stock, so the two are timed identically. Note that for a thinly traded contract
+        the latest bar can be an early-session trade, i.e. a stale price.
+        """
+        try:
+            bars = pd.DataFrame(client.list_aggs(ticker=opt_ticker, multiplier=5, timespan="minute",
+                                                  from_=trade_date, to=trade_date, limit=1000))
+        except Exception as e:
+            print(f"  WARNING: intraday fetch failed for {opt_ticker} on {trade_date} ({e}).")
+            return None
+        if bars.empty:
+            return None
+        bars['bar_dt'] = pd.to_datetime(bars['timestamp'], unit='ms', utc=True).dt.tz_convert('America/New_York')
+        eligible = bars[bars['bar_dt'] <= uk_decision_time_to_ny(trade_date)]
+        if eligible.empty:
+            return None
+        return float(eligible.loc[eligible['bar_dt'].idxmax(), 'close'])
+
+
+    def get_live_option_quote(underlying, opt_ticker):
+        """
+        Current (bid, ask) for an option contract from Polygon's option snapshot, or None if
+        unavailable: no quote returned, a crossed/zero quote, or the plan doesn't include options
+        quotes (the API then errors and we fall back to last-trade +/- Spread). Outside market hours
+        this is the final quote of the session, not a live one.
+        """
+        if pd.isna(opt_ticker):
+            return None
+        try:
+            snap = client.get_snapshot_option(underlying, opt_ticker)
+        except Exception as e:
+            print(f"  WARNING: option quote lookup failed for {opt_ticker} ({e}).")
+            return None
+        quote = getattr(snap, 'last_quote', None)
+        bid = getattr(quote, 'bid', None)
+        ask = getattr(quote, 'ask', None)
+        if not bid or not ask or bid <= 0 or ask <= 0 or ask < bid:
+            return None
+        return float(bid), float(ask)
 
 
     def func_left_join_on_decision_price(left_df, right_df, left_on, right_on):
@@ -331,17 +376,27 @@ def func_import(
         TRADE_FREQUENCY_DAYS), which also reduces overlap between adjacent training
         trades' holding periods relative to sampling every single business day.
 
-        dtest: builds a run of consecutive recent business days ending today, so that
-        "today" (whatever day you happen to run the script) is guaranteed to be included;
-        the calling code later filters this down to just today's row. Live trading isn't
-        restricted to a fixed weekday — you run this whenever suits you, roughly every
-        TRADE_FREQUENCY_DAYS (see the accompanying explanation for exact guidance).
+        dtest: builds `sample_size_` entry dates spaced TRADE_FREQUENCY_DAYS apart, ENDING on the
+        most recent business day (today), so "today" is guaranteed to be included; the calling
+        code later filters this down to just today's row. The older entries are the same weekday
+        as today, one cadence step apart, rolled back to a trading day if they land on a holiday.
+
+        WHY NOT CONSECUTIVE BUSINESS DAYS (the previous behaviour): the rolling features
+        (IV_Rank_26, the *_5 means/slopes, Delta_Flip_Risk) and days_since_prev are computed over
+        successive ENTRY rows. In training those rows are ~1 week apart, so "26" means ~6 months
+        and "5" means ~5 weeks. With consecutive business days the same windows covered ~5 weeks
+        and ~1 week, and days_since_prev was ~1 instead of ~7, so the live model was being fed
+        features on a different scale from the ones it was trained on.
         """
         today_ = datetime.today().date()
 
         if mode == "dtest":
-            days = pd.date_range(end=today_, periods=sample_size_, freq=us_bday)
-            return [d.date() for d in days]
+            latest = us_bday.rollback(pd.Timestamp(today_))
+            days = []
+            for k in range(sample_size_ - 1, -1, -1):
+                d = pd.Timestamp(latest) - pd.Timedelta(days=trade_frequency_days * k)
+                days.append(us_bday.rollback(d).date())
+            return days
 
         # Generous pool of business days to draw samples from
         pool = pd.date_range(end=today_, periods=sample_size_ * trade_frequency_days * 2, freq=us_bday)
@@ -693,53 +748,20 @@ def func_import(
         call_option_price_data['Call_Option_Price_Date'] = pd.to_datetime(
             call_option_price_data['Call_Option_Price_Date_UNIX'], unit='ms').dt.date
 
-        # --- Decision-time intraday lookup for TODAY's option price (dtest/live runs) ---
-        # Daily aggregate bars only finalize after market close (~9pm UK), but a dtest run at 5pm UK
-        # happens well before that, so client.get_aggs(timespan='day') has NO bar yet for today's
-        # entry-leg option price. The fix isn't "grab whatever the price is right now" (that would be
-        # a 5:05pm price if you happen to run 5 minutes late, not a 5pm one) — it's to give options the
-        # EXACT SAME decision-time treatment already used for the underlying stock: fetch 5-minute
-        # intraday bars and pick the latest one at/before 5pm UK. This only fetches the handful of
-        # contracts actually needed for today (front+back leg per ticker), so it's cheap.
-        if run_reason == 'dtest':
-            today_actual = datetime.today().date()
-            needed_today = option_price_data_request[option_price_data_request['First_Date'] == today_actual]['Options_Ticker'].unique()
-            have_today = set(call_option_price_data.loc[
-                call_option_price_data['Call_Option_Price_Date'] == today_actual, 'Call_Options_Ticker']) if not call_option_price_data.empty else set()
-            missing_today = [t for t in needed_today if t not in have_today]
+        # NOTE: the daily bars fetched above are only used for EXIT-date prices (and are saved to the
+        # Call_Option_Prices CSV). ENTRY-leg prices are NOT taken from these daily bars — they're
+        # replaced further down with decision-time (5pm UK) intraday prices, for every run type, so
+        # entry IV / greeks / cashflow are timed the same way as the underlying stock price.
+        # (This replaces the old dtest-only block that did the lookup for today's row alone.)
 
-            if missing_today:
-                print(f"Fetching decision-time intraday prices for {len(missing_today)} option contract(s) with no daily bar yet for today...")
-                new_rows = []
-                for opt_ticker in missing_today:
-                    try:
-                        opt_intraday_request = client.list_aggs(ticker=opt_ticker, multiplier=5, timespan="minute",
-                                                                  from_=today_actual, to=today_actual, limit=1000)
-                        opt_intraday = pd.DataFrame(opt_intraday_request)
-                        if opt_intraday.empty:
-                            print(f"  WARNING: no intraday trades found yet for {opt_ticker} — likely too illiquid "
-                                  f"to have printed a trade before the decision time.")
-                            continue
-
-                        opt_intraday['bar_dt'] = pd.to_datetime(opt_intraday['timestamp'], unit='ms', utc=True).dt.tz_convert('America/New_York')
-                        decision_dt_ny = uk_decision_time_to_ny(today_actual)
-                        eligible = opt_intraday[opt_intraday['bar_dt'] <= decision_dt_ny]
-                        if eligible.empty:
-                            print(f"  WARNING: {opt_ticker} has intraday bars today but none at/before the "
-                                  f"decision time yet — try again closer to/after 5pm UK.")
-                            continue
-
-                        latest_bar = eligible.loc[eligible['bar_dt'].idxmax()]
-                        new_rows.append({'Call_Options_Ticker': opt_ticker, 'Call_Market_Price': latest_bar['close'],
-                                          'Call_Option_Price_Date_UNIX': int(latest_bar['timestamp']),
-                                          'Call_Option_Price_Date': today_actual})
-                    except Exception as e:
-                        print(f"  WARNING: intraday fetch failed for {opt_ticker} ({e}).")
-                if new_rows:
-                    call_option_price_data = pd.concat([call_option_price_data, pd.DataFrame(new_rows)], ignore_index=True)
-                    call_option_price_data = call_option_price_data.drop_duplicates(subset=['Call_Options_Ticker', 'Call_Option_Price_Date'])
-
-        Spread = 0.005  # placeholder bid/ask spread assumption — see explanation notes re: refining this
+        # Fill-cost assumption: each fill is worse than the last-trade price by this fraction — the
+        # short leg is sold at price x (1 - Spread), the long leg bought at price x (1 + Spread), at
+        # both entry and exit. Raised from 0.5% to 5% because 0.5% (about half a cent on a $1 option)
+        # was far below real bid/ask spreads and made the backtest labels too generous. It is a
+        # flat percentage, so it over-charges expensive options and under-charges cheap ones; the
+        # better long-term fix is a per-ticker figure measured from actual fills.
+        # In dtest runs, today's entry uses live bid/ask instead when quotes are available (below).
+        Spread = 0.05
         call_option_price_data['Call_Option_Price_Long'] = round(call_option_price_data['Call_Market_Price'] * (1 + Spread), 3)
         call_option_price_data['Call_Option_Price_Short'] = round(call_option_price_data['Call_Market_Price'] * (1 - Spread), 3)
 
@@ -756,6 +778,70 @@ def func_import(
                              how='left', left_on=['Call_2_Option_Ticker', 'Share_Price_Date'], right_on=['Call_Options_Ticker', 'Call_Option_Price_Date'])
         CCS_day1.drop(columns=['Call_Options_Ticker', 'Call_Option_Price_Date'], inplace=True)
         CCS_day1.rename(columns={'Call_Option_Price_Long': 'Call_2_Option_Price_Long', 'Call_Option_Price_Short': 'Call_2_Option_Price_Short', 'Call_Market_Price': 'Call_2_Market_Price'}, inplace=True)
+
+        # --- Replace ENTRY-leg prices with decision-time (5pm UK) intraday prices ---
+        # The merges above attached each leg's DAILY CLOSE (~4pm New York) on the entry date, but the
+        # underlying price used for the same row is the latest 5-minute bar at/before 5pm UK (~noon
+        # New York). IV and greeks are solved from stock price AND option price together, so mixing
+        # a midday stock price with a 4pm option price distorts every IV-derived feature (an afternoon
+        # move of a few tenths of a percent is enough to shift a call's solved IV by 1-2 vol points,
+        # comparable to the front/back term slope itself). Live (dtest) runs already price options at
+        # decision time, so training now does the same. If a leg has no bar at/before the decision
+        # time, its price stays NaN and the row is dropped (no label) rather than silently using a
+        # later price.
+        print("Fetching decision-time (5pm UK) intraday prices for entry legs...")
+        entry_price_cache = {}
+
+        def cached_entry_price(opt_ticker, trade_date):
+            if pd.isna(opt_ticker) or pd.isna(trade_date):
+                return np.nan
+            key = (opt_ticker, trade_date)
+            if key not in entry_price_cache:
+                price = get_decision_time_option_price(opt_ticker, trade_date)
+                entry_price_cache[key] = np.nan if price is None else price
+            return entry_price_cache[key]
+
+        n_entry_rows = len(CCS_day1)
+        for leg in ("Call_1", "Call_2"):
+            prices = []
+            for i, (opt_ticker, trade_date) in enumerate(zip(CCS_day1[f'{leg}_Option_Ticker'], CCS_day1['Share_Price_Date'])):
+                prices.append(cached_entry_price(opt_ticker, trade_date))
+                if n_entry_rows > 0 and (i % max(1, n_entry_rows // 10) == 0 or i == n_entry_rows - 1):
+                    print(f"  {leg}: {i / n_entry_rows * 100:.0f}% of entry prices fetched")
+            prices = pd.Series(prices, index=CCS_day1.index, dtype='float64')
+            CCS_day1[f'{leg}_Market_Price'] = prices
+            CCS_day1[f'{leg}_Option_Price_Long'] = round(prices * (1 + Spread), 3)
+            CCS_day1[f'{leg}_Option_Price_Short'] = round(prices * (1 - Spread), 3)
+        n_missing_entry = int(CCS_day1[['Call_1_Market_Price', 'Call_2_Market_Price']].isna().any(axis=1).sum())
+        if n_missing_entry:
+            print(f"  NOTE: {n_missing_entry} of {n_entry_rows} entry row(s) have no decision-time price for at "
+                  f"least one leg (no trade printed at/before 5pm UK) — they'll be dropped for lack of a label.")
+
+        # --- dtest only: price TODAY's entry with real bid/ask quotes ---
+        # What it actually costs to open the spread is: sell the short call at the BID, buy the long
+        # call at the ASK. The last-trade price (plus a flat Spread) is only an approximation of that,
+        # and it's frozen at 5pm UK rather than when you trade. So for the one row you'd actually act
+        # on (today's), use the real quotes. Market_Price (and therefore IV/greeks and every model
+        # feature) is left on the last-trade basis so the live features stay comparable with training;
+        # only the entry CASHFLOW changes. Older dtest rows exist just to feed the rolling features, so
+        # they keep the last-trade basis. If either leg has no usable quote, the row keeps the
+        # last-trade-plus-Spread price and Entry_Price_Source says so.
+        CCS_day1['Entry_Price_Source'] = 'last_trade_plus_spread'
+        for quote_col in ('Call_1_Bid', 'Call_1_Ask', 'Call_2_Bid', 'Call_2_Ask'):
+            CCS_day1[quote_col] = np.nan
+        if run_reason == 'dtest':
+            for idx in CCS_day1.index[CCS_day1['Share_Price_Date'] == dtest_actual_date]:
+                quote_1 = get_live_option_quote(ticker, CCS_day1.at[idx, 'Call_1_Option_Ticker'])
+                quote_2 = get_live_option_quote(ticker, CCS_day1.at[idx, 'Call_2_Option_Ticker'])
+                if quote_1 is None or quote_2 is None:
+                    print(f"  NOTE: no usable bid/ask for {ticker} {CCS_day1.at[idx, 'Share_Price_Date']} — "
+                          f"keeping last-trade price +/- {Spread:.0%} for its entry cashflow.")
+                    continue
+                CCS_day1.at[idx, 'Call_1_Bid'], CCS_day1.at[idx, 'Call_1_Ask'] = quote_1
+                CCS_day1.at[idx, 'Call_2_Bid'], CCS_day1.at[idx, 'Call_2_Ask'] = quote_2
+                CCS_day1.at[idx, 'Call_1_Option_Price_Short'] = quote_1[0]   # sell the short call at the bid
+                CCS_day1.at[idx, 'Call_2_Option_Price_Long'] = quote_2[1]    # buy the long call at the ask
+                CCS_day1.at[idx, 'Entry_Price_Source'] = 'quote'
 
         CCS_day2 = pd.merge(CCS_day2, call_option_price_data[['Call_Options_Ticker', 'Call_Option_Price_Date', 'Call_Option_Price_Long', 'Call_Option_Price_Short']],
                              how='left', left_on=['Call_1_Option_Ticker', 'Share_Price_Date'], right_on=['Call_Options_Ticker', 'Call_Option_Price_Date'])
@@ -1051,6 +1137,24 @@ def func_import(
                 dtest_date = fallback_date
             else:
                 print("No prior date has any valid rows either within the fetched window — nothing to fall back to.")
+
+        # Attach the quote detail to the dtest output only. It is deliberately NOT added to
+        # CCS_summary_df, because that table becomes the TRAINING dataset and these columns would
+        # otherwise be picked up there as model features.
+        entry_detail = pd.concat(combined_call_spread_pt1, ignore_index=True)[
+            ['Ticker', 'Share_Price_Date', 'Entry_Price_Source', 'Call_1_Bid', 'Call_1_Ask', 'Call_2_Bid', 'Call_2_Ask']].copy()
+        entry_detail['Share_Price_Date'] = pd.to_datetime(entry_detail['Share_Price_Date'])
+        entry_detail = entry_detail.drop_duplicates(subset=['Ticker', 'Share_Price_Date'])
+        n_rows_before_detail = len(testing_dataset)
+        testing_dataset = testing_dataset.merge(entry_detail, how='left', on=['Ticker', 'Share_Price_Date'])
+        if len(testing_dataset) != n_rows_before_detail:
+            raise ValueError("Testing dataset changed row count when attaching entry quote detail")
+        testing_dataset['Entry_Price_Source'] = testing_dataset['Entry_Price_Source'].fillna('last_trade_plus_spread')
+        # Day_1_Cashflow is already bid/ask-based when Entry_Price_Source == 'quote' (the conservative,
+        # leg-by-leg fill). The mid-based figure shows what a combo order filled near the middle would cost.
+        mid_short = (testing_dataset['Call_1_Bid'] + testing_dataset['Call_1_Ask']) / 2
+        mid_long = (testing_dataset['Call_2_Bid'] + testing_dataset['Call_2_Ask']) / 2
+        testing_dataset['Day_1_Cashflow_Mid'] = round(100 * (mid_short - mid_long), 2)
 
     elif run_reason == 'test':
         print(f'Script is being run for testing so no training dataset will be output')
