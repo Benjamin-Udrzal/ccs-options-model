@@ -8,17 +8,29 @@ this in one shared module guarantees the features the model was trained on and t
 it sees at inference time are computed identically.
 
 Deliberately does NOT import or call func_import.py — it only reads func_import's OUTPUT CSVs
-(via build_hold_close_dataset.py) and replicates func_import's exact pricing/IV formulas
-here as pure, self-contained functions. This means nothing here can ever break func_import's
-own behaviour, at the cost of keeping these formulas in sync by hand if func_import.py's
-conventions ever change.
+(via build_hold_close_dataset.py) and replicates func_import's IV formulas here as pure,
+self-contained functions. This means nothing here can ever break func_import's own behaviour,
+at the cost of keeping those formulas in sync by hand if func_import.py's conventions ever change.
 
-Pricing convention (matches func_import.py exactly):
-  - Option prices are the day's CLOSING aggregate bar (not real bid/ask).
+Pricing convention — NOTE this no longer matches func_import.py exactly:
+  - Everything computed HERE after entry (today's IV/greeks, mark-to-market) uses the day's
+    CLOSING aggregate bar for each option and the underlying — not real bid/ask, and with NO
+    fill-cost adjustment on the exit side.
   - Call_1 = front/short leg (sold to open), Call_2 = back/long leg (bought to open).
-  - Entry cashflow  = 100 * (front_price_at_entry - back_price_at_entry)
+  - The ENTRY CASHFLOW is not computed here; the caller passes it in, so it carries whatever
+    basis the caller has:
+      * historical builder: func_import's Day_1_Cashflow, i.e. the 5pm-UK decision-time intraday
+        option prices (not daily closes), with the flat fill-cost assumption applied
+        (short sold at price x (1 - Spread), long bought at price x (1 + Spread); Spread = 5%).
+      * live check: the "Entry Cashflow" column of the tracker sheet — your ACTUAL fill when you
+        reported one, otherwise the predicted figure.
+  - ENTRY-DAY IV (entry_front_iv / entry_back_iv) comes from the entry-day DAILY CLOSE, in both the
+    builder and the live check, so those two stay consistent with each other (func_import's own
+    entry features use decision-time prices instead, but this model doesn't use those).
   - Exit  cashflow  = 100 * (back_price_on_day  - front_price_on_day)   <- if closed on that day
   - mark-to-market P&L if closed on a given day = entry_cashflow + exit_cashflow_on_that_day
+    (so it includes the entry-side fill cost via entry_cashflow, but no exit-side cost —
+    func_import's Overall Profit includes both, so the two are not directly comparable).
 """
 
 import numpy as np
