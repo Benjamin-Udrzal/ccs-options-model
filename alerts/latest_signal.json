@@ -1,20 +1,20 @@
 {
-  "date": "2026-10-28",
-  "sent_at": 1793217298.671424,
+  "date": "2026-10-29",
+  "sent_at": 1793305873.45195,
   "positions": [
     {
-      "ticker": "GLD",
-      "strike": 370.0,
+      "ticker": "SPY",
+      "strike": 769.0,
       "short_call_expiry": "2026-11-20",
       "long_call_expiry": "2026-12-04",
-      "day_1_cashflow": -114.4
+      "day_1_cashflow": -470.8
     },
     {
-      "ticker": "HYG",
-      "strike": 78.0,
+      "ticker": "XLU",
+      "strike": 43.0,
       "short_call_expiry": "2026-11-20",
       "long_call_expiry": "2026-12-04",
-      "day_1_cashflow": -7.2
+      "day_1_cashflow": -13.2
     }
   ]
 }
