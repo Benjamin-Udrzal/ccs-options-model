@@ -1,20 +1,20 @@
 {
-  "date": "2026-10-29",
-  "sent_at": 1793305873.45195,
+  "date": "2026-10-30",
+  "sent_at": 1793383523.695654,
   "positions": [
     {
-      "ticker": "SPY",
-      "strike": 769.0,
+      "ticker": "XLF",
+      "strike": 57.0,
       "short_call_expiry": "2026-11-20",
       "long_call_expiry": "2026-12-04",
-      "day_1_cashflow": -470.8
+      "day_1_cashflow": -30.9
     },
     {
-      "ticker": "XLU",
-      "strike": 43.0,
+      "ticker": "TLT",
+      "strike": 82.0,
       "short_call_expiry": "2026-11-20",
       "long_call_expiry": "2026-12-04",
-      "day_1_cashflow": -13.2
+      "day_1_cashflow": -28.4
     }
   ]
 }
