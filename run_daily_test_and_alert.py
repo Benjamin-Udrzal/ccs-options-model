@@ -5,9 +5,12 @@ Runs on weekdays at 17:15 Europe/London:
   1. Runs the daily "dtest" import (func_import) — same as run_daily_import.py.
   2. Tests that fresh dataset against the LATEST committed trained model (test_model()).
   3. Sends a Telegram message listing every suggested trade (Open_Trade == 1), with the
-     details needed to open it: ticker, strike, short/long call expiry, expected Day 1 cashflow.
+     details needed to open it: ticker, strike, short/long call expiry, and the PREDICTED Day 1
+     cashflow (from live bid/ask quotes when available — see func_import's Entry_Price_Source —
+     plus a mid-price estimate for comparison).
   4. Saves a numbered reference of today's positions to alerts/latest_signal.json, so that
-     check_telegram_replies.py can resolve "opened 2" back to the actual position details.
+     check_telegram_replies.py can resolve "opened 2 -100" back to the actual position details
+     and record the predicted cashflow next to the ACTUAL one you report.
 
 Requires these GitHub Actions secrets:
   POLYGON_API_KEY      - as used by the daily import
@@ -18,6 +21,7 @@ Requires these GitHub Actions secrets:
 import os
 import sys
 import json
+import math
 import datetime
 from zoneinfo import ZoneInfo
 import requests
@@ -44,6 +48,42 @@ def today_uk_date():
     return datetime.datetime.now(ZoneInfo("Europe/London")).date().isoformat()
 
 
+def _to_float(value):
+    """float(value), or None if it's missing / NaN / not numeric (so JSON and messages never get 'nan')."""
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return None
+    return None if math.isnan(result) else result
+
+
+def fmt_cashflow(value):
+    """Signed dollar amount: -$35.00 / +$10.00 (a plain f"${-35:.2f}" would give "$-35.00")."""
+    if value is None:
+        return "N/A"
+    return f"{'-' if value < 0 else '+'}${abs(value):,.2f}"
+
+
+# Columns that func_import adds to its dtest output (the in-memory dataset it returns). They are
+# not model features, so the model-testing step may not carry them into its predictions table —
+# which is why they're joined back in from func_import's own result rather than read from there.
+ENTRY_DETAIL_COLUMNS = ["Entry_Price_Source", "Day_1_Cashflow_Mid"]
+
+
+def add_entry_detail(df_open, testing_dataset):
+    """Attach Entry_Price_Source / Day_1_Cashflow_Mid from func_import's dtest dataset to the rows
+    being suggested. Joins on Ticker only: a dtest dataset holds one row per ticker (today's entry),
+    so that key is unique and avoids date/expiry type mismatches between the two tables."""
+    if testing_dataset is None or "Ticker" not in df_open.columns or "Ticker" not in testing_dataset.columns:
+        return df_open
+    wanted = [c for c in ENTRY_DETAIL_COLUMNS if c in testing_dataset.columns and c not in df_open.columns]
+    if not wanted:
+        return df_open
+    detail = testing_dataset[["Ticker"] + wanted].drop_duplicates(subset="Ticker", keep="last")
+    merged = df_open.merge(detail, how="left", on="Ticker")
+    return merged if len(merged) == len(df_open) else df_open
+
+
 def build_positions_list(df_open):
     """Turn the Open_Trade==1 rows into a plain list of dicts, numbered the same way the
     Telegram message numbers them (position 1, 2, 3...) — this numbering is the contract
@@ -57,14 +97,19 @@ def build_positions_list(df_open):
 
     positions = []
     for _, row in df_open.iterrows():
-        strike = row.get("Call_strike_price", None)
-        cashflow = row.get("Day_1_Cashflow", None)
+        source = row.get("Entry_Price_Source", None)
         positions.append({
             "ticker": str(row.get("Ticker", "Unknown")),
-            "strike": float(strike) if isinstance(strike, (int, float)) else None,
+            "strike": _to_float(row.get("Call_strike_price", None)),
             "short_call_expiry": str(row.get("Call_1_expiration_date", "N/A")),
             "long_call_expiry": str(row.get("Call_2_expiration_date", "N/A")),
-            "day_1_cashflow": float(cashflow) if isinstance(cashflow, (int, float)) else None,
+            # PREDICTED Day 1 cashflow. check_telegram_replies.py stores this in the sheet next to the
+            # actual cashflow you report back, so the two can be compared.
+            "day_1_cashflow": _to_float(row.get("Day_1_Cashflow", None)),
+            # How that figure was priced: "quote" = live bid/ask (short at bid, long at ask);
+            # anything else = last trade +/- the flat spread assumption in func_import.
+            "entry_price_source": source if isinstance(source, str) else "unknown",
+            "day_1_cashflow_mid": _to_float(row.get("Day_1_Cashflow_Mid", None)),
         })
     return positions
 
@@ -79,16 +124,25 @@ def format_trade_message(positions, signal_date):
     lines = [header, f"\n<b>{len(positions)} position(s) suggested to open:</b>\n"]
     for i, pos in enumerate(positions, start=1):
         strike_str = f"${pos['strike']:.2f}" if pos["strike"] is not None else "N/A"
-        cashflow_str = f"${pos['day_1_cashflow']:.2f}" if pos["day_1_cashflow"] is not None else "N/A"
+        cashflow_str = fmt_cashflow(pos["day_1_cashflow"])
+        if pos.get("entry_price_source") == "quote":
+            basis = "live bid/ask: short sold at bid, long bought at ask"
+        else:
+            basis = "estimated from last trade — no live quote"
+        mid = pos.get("day_1_cashflow_mid")
+        mid_line = f"   Mid-price estimate: {fmt_cashflow(mid)}\n" if mid is not None else ""
         lines.append(
             f"<b>{i}. {pos['ticker']}</b>\n"
             f"   Strike: {strike_str}\n"
             f"   Short Call Expiry: {pos['short_call_expiry']}\n"
             f"   Long Call Expiry: {pos['long_call_expiry']}\n"
-            f"   Expected Day 1 Cashflow: {cashflow_str}\n"
+            f"   Predicted Day 1 Cashflow: {cashflow_str} ({basis})\n"
+            f"{mid_line}"
         )
     lines.append(
-        "\n💡 Reply <b>opened &lt;number&gt;</b> (e.g. \"opened 2\") to log a position to your tracker."
+        "\n💡 Once you've opened them, reply with the ACTUAL Day 1 cashflow you got for each, e.g. "
+        "<b>opened 1 -35, opened 2 -100</b> (negative = you paid, i.e. a debit). "
+        "That logs each position to your tracker with the predicted and actual cashflow side by side."
     )
     return "\n".join(lines)
 
@@ -226,6 +280,7 @@ def main():
     try:
         df = test_result["predictions"]
         df_open = df[df["Open_Trade"] == 1].copy()
+        df_open = add_entry_detail(df_open, import_result.get("testing_dataset"))
 
         positions = build_positions_list(df_open)
         save_signal_reference(positions, signal_date)
