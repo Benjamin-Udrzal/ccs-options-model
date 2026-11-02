@@ -1,20 +1,42 @@
 {
-  "date": "2026-10-30",
-  "sent_at": 1793383523.695654,
+  "date": "2026-11-02",
+  "sent_at": 1793642322.8151,
   "positions": [
     {
-      "ticker": "XLF",
-      "strike": 57.0,
+      "ticker": "QQQ",
+      "strike": 694.0,
       "short_call_expiry": "2026-11-20",
-      "long_call_expiry": "2026-12-04",
-      "day_1_cashflow": -30.9
+      "long_call_expiry": "2026-12-18",
+      "day_1_cashflow": -1106.0,
+      "entry_price_source": "last_trade_plus_spread",
+      "day_1_cashflow_mid": null
     },
     {
       "ticker": "TLT",
       "strike": 82.0,
       "short_call_expiry": "2026-11-20",
-      "long_call_expiry": "2026-12-04",
-      "day_1_cashflow": -28.4
+      "long_call_expiry": "2026-12-11",
+      "day_1_cashflow": -39.6,
+      "entry_price_source": "last_trade_plus_spread",
+      "day_1_cashflow_mid": null
+    },
+    {
+      "ticker": "EEM",
+      "strike": 62.0,
+      "short_call_expiry": "2026-11-20",
+      "long_call_expiry": "2026-12-11",
+      "day_1_cashflow": -90.8,
+      "entry_price_source": "last_trade_plus_spread",
+      "day_1_cashflow_mid": null
+    },
+    {
+      "ticker": "XLP",
+      "strike": 90.0,
+      "short_call_expiry": "2026-11-20",
+      "long_call_expiry": "2026-12-11",
+      "day_1_cashflow": -82.7,
+      "entry_price_source": "last_trade_plus_spread",
+      "day_1_cashflow_mid": null
     }
   ]
 }
