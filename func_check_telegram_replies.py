@@ -145,6 +145,37 @@ def send_telegram_message(bot_token, chat_id, text):
 # Google Sheet helpers
 # ---------------------------------------------------------------------------
 
+def extract_sheet_id(raw):
+    """Return the spreadsheet ID from whatever was stored in GOOGLE_SHEET_ID: a bare ID, an ID with
+    stray spaces/newlines around it (easy to paste in by accident), or a full Google Sheets URL."""
+    raw = (raw or "").strip()
+    match = re.search(r"/d/([A-Za-z0-9_-]+)", raw)
+    return match.group(1) if match else raw
+
+
+def open_spreadsheet(service_account_json, sheet_id):
+    """Open the tracker spreadsheet. Google reports BOTH "no such sheet" and "sheet exists but isn't
+    shared with this account" as the same 404 (gspread's SpreadsheetNotFound), which is hard to
+    act on, so on that error this prints what it can without revealing any secret — which service
+    account is being used (the address to share the sheet with) and the shape of the sheet ID in use
+    — and then re-raises so the run still fails visibly."""
+    info = json.loads(service_account_json)
+    gc = gspread.service_account_from_dict(info)
+    sheet_id = extract_sheet_id(sheet_id)
+    try:
+        return gc.open_by_key(sheet_id)
+    except gspread.exceptions.SpreadsheetNotFound:
+        shown_id = f"{sheet_id[:4]}...{sheet_id[-4:]}" if len(sheet_id) > 8 else repr(sheet_id)
+        print("ERROR: Google can't open the tracker spreadsheet (404). Either the ID in the GOOGLE_SHEET_ID "
+              "secret is wrong, or the sheet isn't shared with the service account.")
+        print(f"  Service account in use : {info.get('client_email', '<no client_email in the JSON secret>')}")
+        print(f"  Sheet ID in use        : {shown_id} ({len(sheet_id)} characters; real IDs are usually 44)")
+        print("  To fix: open the sheet, click Share, and add the service account address above as an Editor; "
+              "then compare the ID shown here with the one in the sheet's URL (between /d/ and /edit) and "
+              "update the GOOGLE_SHEET_ID repository secret if they differ.")
+        raise
+
+
 def get_or_create_worksheet(sheet):
     try:
         ws = sheet.worksheet(SHEET_TAB_NAME)
@@ -364,8 +395,7 @@ def main():
 
     # Only connect to Google Sheets if there's actually something to do there.
     if opened_requests or closed_requests or disambiguation_replies:
-        gc = gspread.service_account_from_dict(json.loads(service_account_json))
-        sheet = gc.open_by_key(sheet_id)
+        sheet = open_spreadsheet(service_account_json, sheet_id)
         worksheet = get_or_create_worksheet(sheet)
         header_row = ensure_worksheet_headers(worksheet)
     else:
