@@ -129,5 +129,18 @@
         "mtm_pnl": 5.8
       }
     ]
+  },
+  "TLT|2026-11-03|81.0": {
+    "entry_underlying_price": 81.11,
+    "entry_front_iv": 0.13428972569958023,
+    "entry_back_iv": 0.12387213818133758,
+    "front_ticker": "O:TLT261127C00081000",
+    "back_ticker": "O:TLT261211C00081000",
+    "history": [
+      {
+        "date": "2026-11-04",
+        "mtm_pnl": -8.0
+      }
+    ]
   }
 }
