@@ -1,22 +1,31 @@
 {
-  "date": "2026-11-04",
-  "sent_at": 1793814097.953198,
+  "date": "2026-11-05",
+  "sent_at": 1793901889.809631,
   "positions": [
     {
-      "ticker": "XLV",
-      "strike": 188.0,
-      "short_call_expiry": "2026-12-04",
+      "ticker": "QQQ",
+      "strike": 655.0,
+      "short_call_expiry": "2026-11-27",
       "long_call_expiry": "2026-12-11",
-      "day_1_cashflow": 6.2,
+      "day_1_cashflow": -637.7,
+      "entry_price_source": "last_trade_plus_spread",
+      "day_1_cashflow_mid": null
+    },
+    {
+      "ticker": "IWM",
+      "strike": 273.0,
+      "short_call_expiry": "2026-11-27",
+      "long_call_expiry": "2026-12-11",
+      "day_1_cashflow": -237.8,
       "entry_price_source": "last_trade_plus_spread",
       "day_1_cashflow_mid": null
     },
     {
       "ticker": "TLT",
-      "strike": 81.0,
+      "strike": 82.0,
       "short_call_expiry": "2026-11-27",
       "long_call_expiry": "2026-12-11",
-      "day_1_cashflow": -33.6,
+      "day_1_cashflow": -39.5,
       "entry_price_source": "last_trade_plus_spread",
       "day_1_cashflow_mid": null
     }

@@ -142,5 +142,12 @@
         "mtm_pnl": -8.0
       }
     ]
+  },
+  "XLV|2026-11-04|188.0": {
+    "entry_underlying_price": 189.66,
+    "entry_front_iv": 0.20835874729913034,
+    "entry_back_iv": 0.1132613361402812,
+    "front_ticker": "O:XLV261204C00188000",
+    "back_ticker": "O:XLV261211C00188000"
   }
 }
