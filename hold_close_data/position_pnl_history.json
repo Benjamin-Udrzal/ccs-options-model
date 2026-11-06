@@ -140,6 +140,10 @@
       {
         "date": "2026-11-04",
         "mtm_pnl": -8.0
+      },
+      {
+        "date": "2026-11-06",
+        "mtm_pnl": -10.0
       }
     ]
   },
@@ -149,5 +153,31 @@
     "entry_back_iv": 0.1132613361402812,
     "front_ticker": "O:XLV261204C00188000",
     "back_ticker": "O:XLV261211C00188000"
+  },
+  "QQQ|2026-11-05|655.0": {
+    "entry_underlying_price": 647.05,
+    "entry_front_iv": 0.33739316752460546,
+    "entry_back_iv": 0.32884321505503894,
+    "front_ticker": "O:QQQ261127C00655000",
+    "back_ticker": "O:QQQ261211C00655000",
+    "history": [
+      {
+        "date": "2026-11-06",
+        "mtm_pnl": 0.0
+      }
+    ]
+  },
+  "IWM|2026-11-05|273.0": {
+    "entry_underlying_price": 270.98,
+    "entry_front_iv": 0.2452603370023826,
+    "entry_back_iv": 0.2506984925521547,
+    "front_ticker": "O:IWM261127C00273000",
+    "back_ticker": "O:IWM261211C00273000",
+    "history": [
+      {
+        "date": "2026-11-06",
+        "mtm_pnl": -18.0
+      }
+    ]
   }
 }
