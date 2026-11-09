@@ -1,13 +1,22 @@
 {
-  "date": "2026-11-06",
-  "sent_at": 1793986986.027484,
+  "date": "2026-11-09",
+  "sent_at": 1794258057.110675,
   "positions": [
     {
       "ticker": "TLT",
       "strike": 82.0,
       "short_call_expiry": "2026-11-27",
-      "long_call_expiry": "2026-12-11",
-      "day_1_cashflow": -37.5,
+      "long_call_expiry": "2026-12-18",
+      "day_1_cashflow": -48.9,
+      "entry_price_source": "last_trade_plus_spread",
+      "day_1_cashflow_mid": null
+    },
+    {
+      "ticker": "XLP",
+      "strike": 90.0,
+      "short_call_expiry": "2026-11-27",
+      "long_call_expiry": "2026-12-18",
+      "day_1_cashflow": -101.3,
       "entry_price_source": "last_trade_plus_spread",
       "day_1_cashflow_mid": null
     }
