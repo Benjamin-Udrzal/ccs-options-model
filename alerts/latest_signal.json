@@ -1,31 +1,22 @@
 {
-  "date": "2026-11-13",
-  "sent_at": 1794592020.056039,
+  "date": "2026-11-16",
+  "sent_at": 1794853462.217134,
   "positions": [
     {
-      "ticker": "SPY",
-      "strike": 750.0,
-      "short_call_expiry": "2026-12-04",
-      "long_call_expiry": "2026-12-18",
-      "day_1_cashflow": -500.5,
-      "entry_price_source": "last_trade_plus_spread",
-      "day_1_cashflow_mid": null
-    },
-    {
       "ticker": "TLT",
-      "strike": 79.0,
-      "short_call_expiry": "2026-12-04",
+      "strike": 82.0,
+      "short_call_expiry": "2026-11-27",
       "long_call_expiry": "2026-12-18",
-      "day_1_cashflow": -37.9,
+      "day_1_cashflow": -48.9,
       "entry_price_source": "last_trade_plus_spread",
       "day_1_cashflow_mid": null
     },
     {
-      "ticker": "HYG",
-      "strike": 77.0,
-      "short_call_expiry": "2026-12-04",
+      "ticker": "XLP",
+      "strike": 90.0,
+      "short_call_expiry": "2026-11-27",
       "long_call_expiry": "2026-12-18",
-      "day_1_cashflow": -9.8,
+      "day_1_cashflow": -101.3,
       "entry_price_source": "last_trade_plus_spread",
       "day_1_cashflow_mid": null
     }

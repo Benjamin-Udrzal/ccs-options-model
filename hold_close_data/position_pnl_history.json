@@ -194,6 +194,10 @@
       {
         "date": "2026-11-13",
         "mtm_pnl": -121.0
+      },
+      {
+        "date": "2026-11-16",
+        "mtm_pnl": 381.0
       }
     ]
   },
@@ -215,6 +219,10 @@
       {
         "date": "2026-11-13",
         "mtm_pnl": 71.0
+      },
+      {
+        "date": "2026-11-16",
+        "mtm_pnl": -2.0
       }
     ]
   },
@@ -224,5 +232,38 @@
     "entry_back_iv": 0.1893039322203483,
     "front_ticker": "O:XLP261127C00090000",
     "back_ticker": "O:XLP261218C00090000"
+  },
+  "TLT|2026-11-13|79.0": {
+    "entry_underlying_price": 79.38,
+    "entry_front_iv": 0.09451847661331682,
+    "entry_back_iv": 0.09679859756237974,
+    "front_ticker": "O:TLT261204C00079000",
+    "back_ticker": "O:TLT261218C00079000",
+    "history": [
+      {
+        "date": "2026-11-16",
+        "mtm_pnl": -1.0
+      }
+    ]
+  },
+  "SPY|2026-11-13|750.0": {
+    "entry_underlying_price": 754.37,
+    "entry_front_iv": null,
+    "entry_back_iv": null,
+    "front_ticker": "O:B1SPY261204C00750000",
+    "back_ticker": "O:B1SPY261218C00750000"
+  },
+  "HYG|2026-11-13|77.0": {
+    "entry_underlying_price": 76.94,
+    "entry_front_iv": 0.04627603883383237,
+    "entry_back_iv": 0.025183271375058346,
+    "front_ticker": "O:HYG261204C00077000",
+    "back_ticker": "O:HYG261218C00077000",
+    "history": [
+      {
+        "date": "2026-11-16",
+        "mtm_pnl": -5.0
+      }
+    ]
   }
 }
