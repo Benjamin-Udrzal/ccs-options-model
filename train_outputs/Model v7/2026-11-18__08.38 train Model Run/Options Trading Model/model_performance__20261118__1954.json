@@ -1,0 +1,64 @@
+{
+    "timestamp": "20261118__1954",
+    "regression_metrics": {
+        "MAE_single_model": 128.54074972047718,
+        "RMSE_single_model": 219.9573798572369,
+        "R2_single_model": -0.07291258888818453,
+        "MAE_EV_decomposition": 118.0842148601454
+    },
+    "classification_metrics": {
+        "Accuracy": 0.7224770642201835,
+        "Precision": 0.0,
+        "Recall": 0.0,
+        "F1": 0.0,
+        "ROC_AUC": 0.61198738170347,
+        "Confusion_Matrix": [
+            [
+                315,
+                2
+            ],
+            [
+                119,
+                0
+            ]
+        ]
+    },
+    "calibration_table": [
+        {
+            "bucket": "(-0.001, 0.2]",
+            "n": 130,
+            "predicted_mean": 0.16781507148213054,
+            "actual_win_rate": 0.16923076923076924
+        },
+        {
+            "bucket": "(0.2, 0.4]",
+            "n": 294,
+            "predicted_mean": 0.25371870231743887,
+            "actual_win_rate": 0.30612244897959184
+        },
+        {
+            "bucket": "(0.4, 0.5]",
+            "n": 10,
+            "predicted_mean": 0.4279060492551447,
+            "actual_win_rate": 0.7
+        },
+        {
+            "bucket": "(0.5, 0.6]",
+            "n": 2,
+            "predicted_mean": 0.5109456206934446,
+            "actual_win_rate": 0.0
+        },
+        {
+            "bucket": "(0.6, 0.8]",
+            "n": 0,
+            "predicted_mean": NaN,
+            "actual_win_rate": NaN
+        },
+        {
+            "bucket": "(0.8, 1.0]",
+            "n": 0,
+            "predicted_mean": NaN,
+            "actual_win_rate": NaN
+        }
+    ]
+}
