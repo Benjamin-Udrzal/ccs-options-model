@@ -1,5 +1,15 @@
 {
-  "date": "2026-11-24",
-  "sent_at": 1795542532.417831,
-  "positions": []
+  "date": "2026-11-25",
+  "sent_at": 1795638206.675811,
+  "positions": [
+    {
+      "ticker": "XLF",
+      "strike": 56.0,
+      "short_call_expiry": "2026-12-18",
+      "long_call_expiry": "2027-01-08",
+      "day_1_cashflow": -14.7,
+      "entry_price_source": "last_trade_plus_spread",
+      "day_1_cashflow_mid": null
+    }
+  ]
 }
